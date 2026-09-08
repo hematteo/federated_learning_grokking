@@ -7,8 +7,9 @@ network just learns MNIST and there is no delay; scaling the initial weights up
 to drift inward, which is what produces the delayed generalisation.
 
 Biases are included (unlike GrokNet) — this is an ordinary classifier MLP, not
-the analytically-special mean-field network. It has no W1/P interface, so the
-GrokNet Fourier metrics correctly skip it (fourier_applicable -> False).
+the analytically-special mean-field network. It exposes `P` for the metrics
+interface but no `W1`, and `dft_applicable` requires both, so the GrokNet Fourier
+metrics correctly skip it.
 """
 
 import torch

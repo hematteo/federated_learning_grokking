@@ -41,10 +41,6 @@ def _no_probe(model, x, y, cfg):
     return {}
 
 
-def _coset_probe(model, x, y, cfg):
-    return coset_attribution(model, x, y, cfg)
-
-
 def _s5_quadratic_probe(model, x, y, cfg):
     """Coset attribution PLUS the exact internals available on setup D only.
 
@@ -156,8 +152,6 @@ def probe_keys(cfg):
                 keys += [f"irrep_u_{name}" for name in irreps.IRREP_NAMES]
                 keys += ["irrep_structure_u", "irrep_structure_v"]
         return tuple(keys)
-    if probe is _coset_probe:
-        return ("coset_accuracy", "coset_purity")
     if probe is _embed_ipr_probe:
         return ("embed_ipr",)
     return ()

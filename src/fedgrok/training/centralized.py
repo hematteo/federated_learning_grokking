@@ -96,6 +96,18 @@ def train(cfg: Config):
         # divide evenly), but reduced_arm derives the floor arm's budget from the
         # FL arm's step count, which is under no obligation to be round.
         if epoch % cfg.log_every == 0 or epoch == cfg.epochs:
+            # eval() for the held-out pass. No model in this repo has dropout or
+            # batch norm -- GrokFormer deliberately has no LayerNorm either -- so
+            # this changes nothing today. It is here because the FEDERATED loop's
+            # evaluate_fn does call eval(), and an undocumented asymmetry between
+            # the two loops is the kind that stays invisible until a model gains
+            # a stochastic layer and only the centralized numbers move.
+            #
+            # `out_train` is still the training forward pass, computed above in
+            # train mode. That is the cheap and conventional choice, and it is
+            # the one remaining difference from the federated loop, which
+            # recomputes train accuracy under eval().
+            model.eval()
             with torch.no_grad():
                 out_test = model(x_test)
                 test_loss = loss_fn(out_test, y_test_target).item()
@@ -123,6 +135,7 @@ def train(cfg: Config):
             # only weight signal available on the transformer / MNIST MLP.
             report = weight_norm_report(model)
             probe = mechanistic_probe(cfg)(model, x_test, y_test, cfg)
+            model.train()
 
             history["epoch"].append(epoch)
             history["train_loss"].append(train_loss_value)

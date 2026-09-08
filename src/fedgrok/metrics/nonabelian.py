@@ -46,7 +46,6 @@ def coset_attribution(model, x, y_true, cfg) -> dict:
     in_right_coset = (pred_coset == true_coset)
     exact = (preds == y_true)
 
-    n = y_true.shape[0]
     coset_acc = float(in_right_coset.float().mean().item())
     n_in_coset = int(in_right_coset.sum().item())
     coset_purity = float(exact.sum().item()) / n_in_coset if n_in_coset > 0 else 0.0
