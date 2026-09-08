@@ -1,0 +1,228 @@
+<title>Paper Axes Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  color-scheme:light;
+  --bg:#EEF0F2; --bg-2:#E5E8EC; --surface:#fcfcfb;
+  --ink:#1B1F24; --ink-2:#4F565E; --ink-3:#7C848C;
+  --rule:#D3D8DE; --hair:rgba(27,31,36,.10); --grid:#e1e0d9; --axis:#c3c2b7;
+  --accent:#2F4E9C; --accent-soft:rgba(47,78,156,.10);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --good:#0ca30c; --good-soft:rgba(12,163,12,.13); --critical:#d03b3b; --critical-soft:rgba(208,59,59,.14); --warn:#fab219; --warn-soft:rgba(250,178,25,.20);
+  --thresh:#7C848C; --overlay:rgba(27,31,36,.55);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#15181C; --bg-2:#1C2026; --surface:#1a1a19;
+    --ink:#E4E7EB; --ink-2:#B4BAC2; --ink-3:#8A9199;
+    --rule:#2A3037; --hair:rgba(255,255,255,.10); --grid:#2c2c2a; --axis:#383835;
+    --accent:#8FA8E8; --accent-soft:rgba(143,168,232,.14);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+    --good-soft:rgba(12,163,12,.20); --critical-soft:rgba(208,59,59,.22); --warn-soft:rgba(250,178,25,.18);
+    --thresh:#8A9199; --overlay:rgba(0,0,0,.65);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#15181C; --bg-2:#1C2026; --surface:#1a1a19;
+  --ink:#E4E7EB; --ink-2:#B4BAC2; --ink-3:#8A9199;
+  --rule:#2A3037; --hair:rgba(255,255,255,.10); --grid:#2c2c2a; --axis:#383835;
+  --accent:#8FA8E8; --accent-soft:rgba(143,168,232,.14);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+  --good-soft:rgba(12,163,12,.20); --critical-soft:rgba(208,59,59,.22); --warn-soft:rgba(250,178,25,.18);
+  --thresh:#8A9199; --overlay:rgba(0,0,0,.65);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--hair)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1380px;margin:0 auto;padding:0 24px}
+h1,h2{font-family:Spectral,Georgia,"Times New Roman",serif;font-weight:600;line-height:1.15;text-wrap:balance;margin:0}
+h1{font-size:2.2rem;letter-spacing:-.01em}
+h2{font-size:1.4rem}
+.eyebrow{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:500}
+.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+header{padding:40px 0 18px}
+header p{color:var(--ink-2);max-width:70ch;margin:12px 0 0}
+.filters{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:end;padding:16px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--bg);z-index:3}
+.filters label{display:flex;flex-direction:column;gap:4px;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:500}
+.filters select{font:inherit;font-size:.9rem;letter-spacing:0;text-transform:none;color:var(--ink);background:var(--surface);border:1px solid var(--rule);padding:6px 30px 6px 9px;border-radius:3px;min-width:170px}
+.filters .chk{flex-direction:row;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:.9rem;color:var(--ink-2);font-weight:400;padding-bottom:7px}
+.filters .count{margin-left:auto;font-size:.86rem;color:var(--ink-2);padding-bottom:7px}
+.filters .count b{color:var(--ink);font-weight:500}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--ink-2);margin:14px 0 4px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:2px;display:inline-block;background:currentColor}
+.legend i.dot{width:8px;height:8px;border-radius:50%;border:2px solid currentColor;background:var(--surface)}
+.legend i.dash{height:0;border-top:2px dashed currentColor}
+.group{margin:26px 0 0}
+.group h2{display:flex;align-items:baseline;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--rule)}
+.group h2 small{font:500 .78rem/1 "IBM Plex Sans",sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px;margin:14px 0 0}
+.panel{background:var(--surface);border:1px solid var(--rule);padding:10px 10px 6px;text-align:left;font:inherit;color:inherit;cursor:pointer;display:block;width:100%}
+.panel:hover{border-color:var(--accent)}
+.panel .hd{display:flex;align-items:center;gap:8px;font-size:.84rem;margin:0 0 4px}
+.panel .hd .cell{font-family:"IBM Plex Mono",monospace;font-weight:500}
+.panel .hd .k{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:.8rem;color:var(--ink-2)}
+.panel svg{width:100%;height:auto;display:block}
+.setup{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:.84rem;font-weight:500}
+.setup i{width:10px;height:10px;border-radius:2px;display:inline-block;flex:none}
+.sA{background:var(--s1)}.sB{background:var(--s2)}.sC{background:var(--s3)}.sD{background:var(--s4)}.sE{background:var(--s5)}
+.tag{font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:2px;background:var(--bg-2);color:var(--ink-2)}
+.pill{font-size:.76rem;padding:1px 7px;border-radius:3px;white-space:nowrap}
+.pill.held{background:var(--good-soft)}.pill.part{background:var(--warn-soft)}.pill.none{background:var(--critical-soft)}
+#tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--bg);padding:6px 9px;font-size:.76rem;line-height:1.35;border-radius:3px;box-shadow:0 2px 10px rgba(0,0,0,.25);display:none;z-index:20;font-family:"IBM Plex Mono",monospace;white-space:nowrap}
+#modal{position:fixed;inset:0;background:var(--overlay);display:none;z-index:10;padding:24px;overflow:auto}
+#modal.open{display:block}
+#modal .box{max-width:1180px;margin:0 auto;background:var(--surface);border:1px solid var(--rule);padding:18px 20px 16px}
+#modal .top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#modal .top h2{font-size:1.25rem}
+#modal .close{margin-left:auto;font:inherit;background:none;border:1px solid var(--rule);color:var(--ink);padding:5px 10px;border-radius:3px;cursor:pointer}
+#modal svg{width:100%;height:auto;display:block;margin-top:10px}
+table{border-collapse:collapse;width:100%;font-size:.86rem;margin-top:14px}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:500;border-bottom:1px solid var(--axis)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;font-family:"IBM Plex Mono",monospace;font-size:.82rem}
+.tablewrap{overflow-x:auto}
+details{margin:36px 0 0}
+summary{cursor:pointer;font-family:Spectral,Georgia,serif;font-size:1.3rem;font-weight:600;padding:8px 0}
+footer{padding:30px 0 50px;font-size:.82rem;color:var(--ink-3);margin-top:30px;border-top:1px solid var(--rule)}
+footer p{max-width:80ch;margin:0 0 .6em}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<div id="tip" role="status" aria-live="polite"></div>
+
+<header class="wrap">
+  <div class="eyebrow">Federated grokking · every run of the 2–4 September sweep</div>
+  <h1 style="margin-top:8px">Paper Axes Atlas</h1>
+  <p>Test and train accuracy against gradient steps for all 201 runs in the four manifests — the 156 new ones and the 45 banked controls they read against — grouped by cell, three seeds to a panel. Click any panel for the large view with run ids. The companion write-up is <a href="https://claude.ai/code/artifact/8caa5453-35dd-4bdb-87d7-30c3a830692f">Paper Axes Sweep</a>.</p>
+</header>
+
+<div class="wrap">
+<div class="filters" role="group" aria-label="Filters">
+  <label>Manifest<select id="f-man"><option value="">all four</option></select></label>
+  <label>Setup<select id="f-setup"><option value="">A–E</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option></select></label>
+  <label>Outcome<select id="f-out"><option value="">any</option><option value="held">all seeds held</option><option value="part">some seeds censored</option><option value="none">no seed held</option></select></label>
+  <label class="chk"><input type="checkbox" id="f-train" checked> show train accuracy</label>
+  <label class="chk"><input type="checkbox" id="f-banked" checked> include banked controls</label>
+  <div class="count"><b id="n-runs">0</b> runs in <b id="n-cells">0</b> cells</div>
+</div>
+<div class="legend">
+  <span style="color:var(--s1)"><i></i><span style="color:var(--ink-2)">test accuracy, one line per seed (colour = setup)</span></span>
+  <span style="color:var(--ink-3)"><i></i><span style="color:var(--ink-2)">train accuracy</span></span>
+  <span style="color:var(--thresh)"><i class="dash"></i><span style="color:var(--ink-2)">that run's grokking bar</span></span>
+  <span style="color:var(--ink-2)"><i class="dot"></i>first crossing</span>
+</div>
+
+<div id="groups"></div>
+
+<details>
+  <summary>Every run as a table</summary>
+  <div class="tablewrap"><table id="runs-table"><thead><tr><th>Run id</th><th>Manifest</th><th>Setup</th><th>Cell</th><th class="n">seed</th><th>Source</th><th>Held</th><th class="n">t_memo</th><th class="n">t_first_cross</th><th class="n">peak train</th><th class="n">final test</th><th class="n">budget (steps)</th><th class="n">wall h</th></tr></thead><tbody></tbody></table></div>
+</details>
+</div>
+
+<div id="modal" role="dialog" aria-modal="true" aria-labelledby="m-title">
+  <div class="box">
+    <div class="top"><span id="m-setup"></span><h2 id="m-title"></h2><span id="m-k" class="pill"></span><button class="close" id="m-close" type="button">Close</button></div>
+    <svg id="m-svg" viewBox="0 0 1120 440" role="img" aria-label="Enlarged panel"></svg>
+    <div class="tablewrap"><table id="m-table"><thead><tr><th>Run id</th><th class="n">seed</th><th>Source</th><th>Held</th><th class="n">t_memo</th><th class="n">t_first_cross</th><th class="n">peak train</th><th class="n">final test</th><th class="n">wall h</th></tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+
+<footer><div class="wrap">
+  <p>Curves are the logged <span class="mono">test_acc</span> and <span class="mono">train_acc</span> from each run's <span class="mono">history_*.json</span>, downsampled to ≤200 points; the x-axis is the run's own <span class="mono">total_steps</span>, which on the participation manifest accumulates E·f per round. "Held" is the run's <span class="mono">grokked</span> flag — above its bar to the end; the first-crossing marker is <span class="mono">t_first_cross</span>. Run ids are content hashes of the configuration.</p>
+</div></footer>
+
+<script type="application/json" id="atlas">__DATA__</script>
+<script>
+(function(){
+const D=JSON.parse(document.getElementById('atlas').textContent);
+const COL={A:'var(--s1)',B:'var(--s2)',C:'var(--s3)',D:'var(--s4)',E:'var(--s5)'};
+const SHORT={A:'quad-MLP · mod-97 · GD',B:'transformer · mod-113',C:'transformer · S₅',D:'quad-MLP · S₅',E:'MLP · MNIST'};
+const NS='http://www.w3.org/2000/svg';
+const el=(t,a={},p)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e;};
+const h=(t,a={},p)=>{const e=document.createElement(t);for(const k in a){if(k==='text')e.textContent=a[k];else if(k==='html')e.innerHTML=a[k];else e.setAttribute(k,a[k]);}if(p)p.appendChild(e);return e;};
+const fmt=n=>n==null?'∞':Math.round(n).toLocaleString('en-US');
+const kfmt=v=>v>=1e6?(v/1e6).toFixed(v%1e6?1:0)+'M':v>=1000?Math.round(v/1000)+'k':String(v);
+const tip=document.getElementById('tip');
+const showTip=(html,x,y)=>{tip.innerHTML=html;tip.style.display='block';const w=tip.offsetWidth,hh=tip.offsetHeight;tip.style.left=Math.min(x+14,innerWidth-w-8)+'px';tip.style.top=Math.max(8,y-hh-12)+'px';};
+const hideTip=()=>{tip.style.display='none';};
+const MANLABEL=Object.fromEntries(D.manifests.map(m=>[m.key,m.label]));
+const manSel=document.getElementById('f-man');D.manifests.forEach(m=>h('option',{value:m.key,text:m.label},manSel));
+
+// ── group runs into cells
+const cells=new Map();
+D.runs.forEach(r=>{const key=r.man+'|'+r.setup+'|'+r.cell;if(!cells.has(key))cells.set(key,{key,man:r.man,setup:r.setup,cell:r.cell,rung:r.rung,runs:[]});cells.get(key).runs.push(r);});
+const manOrder=D.manifests.map(m=>m.key);
+const sorted=[...cells.values()].sort((a,b)=>manOrder.indexOf(a.man)-manOrder.indexOf(b.man)||a.setup.localeCompare(b.setup)||a.rung-b.rung);
+sorted.forEach(c=>c.runs.sort((a,b)=>a.seed-b.seed));
+const outcome=runs=>{const k=runs.filter(r=>r.held).length;return k===runs.length?'held':k===0?'none':'part';};
+
+// ── draw one cell into an svg
+function draw(svg,runs,opt){
+  const W=+svg.viewBox.baseVal.width,H=+svg.viewBox.baseVal.height;svg.innerHTML='';
+  const big=opt.big;const m={t:big?18:8,r:big?70:10,b:big?38:22,l:big?52:34};
+  const xmax=Math.max(...runs.map(r=>r.budget));
+  const x=v=>m.l+v/xmax*(W-m.l-m.r), y=v=>H-m.b-v/100*(H-m.t-m.b);
+  const g=el('g',{},svg);
+  [25,50,75,100].forEach(v=>el('line',{x1:m.l,x2:W-m.r,y1:y(v),y2:y(v),stroke:'var(--grid)','stroke-width':1},g));
+  [0,50,100].forEach(v=>el('text',{x:m.l-5,y:y(v)+3.5,'text-anchor':'end',fill:'var(--ink-3)','font-size':big?11:9,'font-family':'IBM Plex Mono, monospace'},g).textContent=v);
+  const xt=big?[0,.25,.5,.75,1]:[0,.5,1];
+  xt.forEach(f=>{el('text',{x:x(xmax*f),y:H-m.b+(big?16:12),'text-anchor':f===0?'start':f===1?'end':'middle',fill:'var(--ink-3)','font-size':big?11:9,'font-family':'IBM Plex Mono, monospace'},g).textContent=kfmt(Math.round(xmax*f));});
+  el('line',{x1:m.l,x2:W-m.r,y1:y(0),y2:y(0),stroke:'var(--axis)','stroke-width':1},g);
+  const thr=runs[0].thr;el('line',{x1:m.l,x2:W-m.r,y1:y(thr),y2:y(thr),stroke:'var(--thresh)','stroke-width':1,'stroke-dasharray':'4 4',fill:'none'},g);
+  if(big){el('text',{x:W-m.r+6,y:y(thr)+4,fill:'var(--ink-3)','font-size':10.5},g).textContent=thr+'% bar';el('text',{x:W-m.r,y:H-8,'text-anchor':'end',fill:'var(--ink-2)','font-size':11.5},g).textContent='total gradient steps';el('text',{x:m.l,y:12,fill:'var(--ink-2)','font-size':11.5},g).textContent='accuracy, %';}
+  const pts=[];
+  const path=(r,ys)=>ys.map((v,i)=>(i?'L':'M')+x(r.steps[i]).toFixed(1)+' '+y(v).toFixed(1)).join(' ');
+  if(opt.train)runs.forEach(r=>el('path',{d:path(r,r.train),fill:'none',stroke:'var(--ink-3)','stroke-width':big?1.2:1,opacity:.7,'stroke-linejoin':'round'},g));
+  runs.forEach((r,i)=>{el('path',{d:path(r,r.test),fill:'none',stroke:COL[r.setup],'stroke-width':big?2:1.6,opacity:r.banked?.75:.95,'stroke-linejoin':'round','stroke-linecap':'round'},g);
+    if(r.t_fc!=null){let k=0;for(let j=0;j<r.steps.length;j++){if(r.steps[j]>=r.t_fc){k=j;break;}}el('circle',{cx:x(r.steps[k]),cy:y(r.test[k]),r:big?4.5:3,fill:'var(--surface)',stroke:COL[r.setup],'stroke-width':2},g);}
+    if(big)el('text',{x:x(r.steps[r.steps.length-1])+6,y:y(r.test[r.test.length-1])+4,fill:'var(--ink-2)','font-size':11},g).textContent='seed '+r.seed;
+    r.steps.forEach((s,j)=>pts.push({sx:x(s),sy:y(r.test[j]),r,j}));});
+  svg.onmousemove=e=>{const pt=svg.createSVGPoint();pt.x=e.clientX;pt.y=e.clientY;const q=pt.matrixTransform(svg.getScreenCTM().inverse());let best=null,bd=1e9;for(const o of pts){const d=(o.sx-q.x)**2+(o.sy-q.y)**2;if(d<bd){bd=d;best=o;}}if(best&&bd<(big?900:400)){const r=best.r,j=best.j;showTip(`<b>seed ${r.seed}</b>${r.banked?' · banked':''}<br>step ${fmt(r.steps[j])}<br>test ${r.test[j].toFixed(1)}%  train ${r.train[j].toFixed(1)}%`,e.clientX,e.clientY);}else hideTip();};
+  svg.onmouseleave=hideTip;
+}
+
+// ── render
+const groupsEl=document.getElementById('groups'),tbody=document.querySelector('#runs-table tbody');
+function pill(runs){const k=runs.filter(r=>r.held).length,o=outcome(runs);return `<span class="pill ${o}">held ${k}/${runs.length}</span>`;}
+function render(){
+  const fm=manSel.value,fs=document.getElementById('f-setup').value,fo=document.getElementById('f-out').value,tr=document.getElementById('f-train').checked,bk=document.getElementById('f-banked').checked;
+  groupsEl.innerHTML='';tbody.innerHTML='';let nR=0,nC=0;let curMan=null,gridEl=null;
+  sorted.forEach(c=>{
+    const runs=c.runs.filter(r=>bk||!r.banked);if(!runs.length)return;
+    if(fm&&c.man!==fm)return;if(fs&&c.setup!==fs)return;if(fo&&outcome(runs)!==fo)return;
+    if(c.man!==curMan){curMan=c.man;const gwrap=h('div',{class:'group'},groupsEl);h('h2',{html:`${MANLABEL[c.man]} <small>${c.man}</small>`},gwrap);gridEl=h('div',{class:'grid'},gwrap);}
+    nC++;nR+=runs.length;
+    const b=h('button',{class:'panel',type:'button','aria-label':`${c.setup} ${c.cell}, open large view`},gridEl);
+    h('div',{class:'hd',html:`<span class="setup"><i class="s${c.setup}"></i>${c.setup}</span><span class="cell">${c.cell}</span>${runs.every(r=>r.banked)?'<span class="tag">banked</span>':''}<span class="k">${pill(runs)}</span>`},b);
+    const svg=el('svg',{viewBox:'0 0 320 190',role:'img','aria-label':`${c.setup} ${c.cell}: accuracy curves for ${runs.length} runs`},b);
+    draw(svg,runs,{train:tr,big:false});
+    b.addEventListener('click',()=>openModal(c,runs,tr));
+    runs.forEach(r=>{const trr=h('tr',{},tbody);trr.innerHTML=`<td class="mono" style="font-size:.78rem">${r.id}</td><td>${MANLABEL[r.man]}</td><td><span class="setup"><i class="s${r.setup}"></i>${r.setup}</span></td><td class="mono">${r.cell}</td><td class="n">${r.seed}</td><td>${r.banked?'banked control':'new'}</td><td>${r.held?'yes':'no'}</td><td class="n">${fmt(r.t_memo)}</td><td class="n">${fmt(r.t_fc)}</td><td class="n">${r.peak.toFixed(1)}</td><td class="n">${r.final.toFixed(1)}</td><td class="n">${fmt(r.budget)}</td><td class="n">${r.wall.toFixed(2)}</td>`;});
+  });
+  document.getElementById('n-runs').textContent=nR;document.getElementById('n-cells').textContent=nC;
+}
+['f-man','f-setup','f-out','f-train','f-banked'].forEach(id=>document.getElementById(id).addEventListener('change',render));
+render();
+
+// ── modal
+const modal=document.getElementById('modal');let lastFocus=null;
+function openModal(c,runs,tr){lastFocus=document.activeElement;modal.classList.add('open');
+  document.getElementById('m-setup').innerHTML=`<span class="setup"><i class="s${c.setup}"></i>${c.setup}</span> <span style="color:var(--ink-3);font-size:.85rem">${SHORT[c.setup]}</span>`;
+  document.getElementById('m-title').textContent=`${MANLABEL[c.man]} · ${c.cell}`;
+  const k=document.getElementById('m-k');const o=outcome(runs);k.className='pill '+o;k.textContent=`held ${runs.filter(r=>r.held).length}/${runs.length}`;
+  draw(document.getElementById('m-svg'),runs,{train:tr,big:true});
+  const tb=document.querySelector('#m-table tbody');tb.innerHTML='';runs.forEach(r=>{const trr=h('tr',{},tb);trr.innerHTML=`<td class="mono" style="font-size:.8rem">${r.id}</td><td class="n">${r.seed}</td><td>${r.banked?'banked control':'new'}</td><td>${r.held?'yes':'no'}</td><td class="n">${fmt(r.t_memo)}</td><td class="n">${fmt(r.t_fc)}</td><td class="n">${r.peak.toFixed(1)}</td><td class="n">${r.final.toFixed(1)}</td><td class="n">${r.wall.toFixed(2)}</td>`;});
+  document.getElementById('m-close').focus();}
+function closeModal(){modal.classList.remove('open');hideTip();if(lastFocus)lastFocus.focus();}
+document.getElementById('m-close').addEventListener('click',closeModal);
+modal.addEventListener('click',e=>{if(e.target===modal)closeModal();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal.classList.contains('open'))closeModal();});
+})();
+</script>
+
