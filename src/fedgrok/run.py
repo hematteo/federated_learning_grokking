@@ -217,12 +217,26 @@ def run_spec(spec: dict, results_root: str = DEFAULT_RESULTS_DIR,
 
 def _write_json_atomic(path, obj):
     """Write JSON via a temp file + rename, so a crash never leaves a partial
-    result that resume would mistake for a completed run. inf -> "inf"."""
+    result that resume would mistake for a completed run.
+
+    Non-finite floats become STRINGS: inf -> "inf", -inf -> "-inf", nan -> "nan".
+
+    Python's json emits bare `Infinity` / `NaN` tokens for these, which are not in
+    the JSON grammar and which no other parser accepts. `inf` was handled from the
+    start; `nan` was not, and `final_ipr` is NaN on every non-modular run (IPR is
+    GrokNet-specific), so 1,038 of the 1,529 banked result files were unparseable
+    by anything but Python. That went unnoticed because the whole internal
+    pipeline IS Python, and it matters now the results are packaged for a public
+    data host. `scripts/repair_result_json.py` fixes files already on disk.
+
+    allow_nan=False makes it loud rather than silent if a non-finite value ever
+    reaches json.dump without passing through _san.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     def _san(o):
-        if isinstance(o, float) and math.isinf(o):
-            return "inf"
+        if isinstance(o, float) and not math.isfinite(o):
+            return "nan" if math.isnan(o) else ("inf" if o > 0 else "-inf")
         if isinstance(o, dict):
             return {k: _san(v) for k, v in o.items()}
         if isinstance(o, list):
@@ -232,7 +246,7 @@ def _write_json_atomic(path, obj):
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as handle:
-            json.dump(_san(obj), handle, indent=2)
+            json.dump(_san(obj), handle, indent=2, allow_nan=False)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):

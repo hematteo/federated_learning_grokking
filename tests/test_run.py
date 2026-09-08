@@ -46,6 +46,40 @@ def test_result_json_is_valid_and_inf_serialised(tmp_path):
     assert data["censored"] is True
 
 
+def test_result_json_is_parseable_by_a_strict_parser(tmp_path):
+    """No bare NaN / Infinity tokens -- those are Python extensions, not JSON.
+
+    `final_ipr` is NaN on every non-modular run (IPR is GrokNet-specific), and
+    for a long time that was written as a bare `NaN`, which Python reads back
+    happily and jq / JS / Go / Rust reject. It went unnoticed because the whole
+    internal pipeline is Python. This asserts the file is portable.
+    """
+    run_spec(CHEAP, results_root=str(tmp_path / "runs"),
+             histories_root=str(tmp_path / "hist"))
+    text = open(result_path(CHEAP, str(tmp_path / "runs"))).read()
+
+    def _reject(token):
+        raise AssertionError(f"non-standard JSON constant in result file: {token}")
+
+    json.loads(text, parse_constant=_reject)
+
+
+def test_non_finite_floats_serialise_as_strings(tmp_path):
+    from fedgrok.run import _write_json_atomic
+
+    path = str(tmp_path / "row.json")
+    _write_json_atomic(path, {
+        "pos": float("inf"), "neg": float("-inf"), "nan": float("nan"),
+        "nested": [float("nan"), {"deep": float("inf")}], "ok": 1.5,
+    })
+    text = open(path).read()
+    assert "NaN" not in text and "Infinity" not in text
+
+    data = json.loads(text, parse_constant=lambda t: pytest.fail(f"bare {t}"))
+    assert data == {"pos": "inf", "neg": "-inf", "nan": "nan",
+                    "nested": ["nan", {"deep": "inf"}], "ok": 1.5}
+
+
 def test_result_path_is_stable_without_explicit_id():
     # No "id" in the spec -> result_path must still resolve deterministically.
     p1 = result_path(CHEAP, "results/data/runs")
