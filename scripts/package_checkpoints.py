@@ -45,6 +45,7 @@ import glob
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -200,6 +201,14 @@ def main():
             for r in rows:
                 fh.write(f"{r['sha256']}  {r['archive']}\n")
     write_readme(args.out, rows, total_bytes, total_files)
+    # Drop the run table in beside the archives so this directory is a COMPLETE
+    # dataset on its own -- the fresh-dataset path the docstring describes, where
+    # nothing merges onto a published release and a reader holding the tarballs
+    # would otherwise have no way to turn a run id back into a config.
+    # In the additive path this copy is inert: merge_checkpoint_release.py reads
+    # the table from the repo via --table and writes the authoritative one into
+    # <root>, which is what step 3 uploads. Harmless there, load-bearing here.
+    shutil.copy2(CSV_PATH, os.path.join(args.out, os.path.basename(CSV_PATH)))
 
     print(f"\nWrote {len(rows)} archive(s) + MANIFEST.csv + README.md to {args.out}")
     print("\nNext — publish to FedGrok/fedgrok-checkpoints (additive; see the module docstring):")
