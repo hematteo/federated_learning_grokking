@@ -29,20 +29,22 @@ does not.*
 - **The cost decomposes into two clocks.** Memorisation time grows with K; the
   delay between memorising and generalising is roughly flat. Budgets set as a
   multiple of the centralised grokking time under-provision exactly the high-K
-  cells, which manufactured eight of the nine "breakdowns" this project reported
-  before re-measuring them. `t_memo` is recorded next to `t_grok` for that reason.
+  cells: seven of the nine "breakdowns" this project reported dissolved on
+  re-measurement as clocks running out, an eighth as shard starvation. `t_memo`
+  is recorded next to `t_grok` for that reason.
 - **One breakdown is real.** Setup D at E = 50 local epochs reaches 100% train
-  accuracy by step 3,000 and sits at 80–83% test for two million steps with weight
-  norm, drift and train loss all stationary: a fixed point with the gradient alive,
-  not a clock running out.
+  accuracy by step 3,000 and sits at 80–83% test for two million steps, with
+  weight norm and per-round drift stationary and train loss never below 0.055: a
+  fixed point with the gradient alive, not a clock running out.
 - **How you partition matters more than how far you fragment.** Coherent shards
-  (each client holding one operand) grok where random shards do not on the anchor
-  and on setup C, and incoherent structure (sharding by target) is the worst
-  partition everywhere. The mechanism is visible early: per-neuron spectral
-  concentration separates the coherent and random arms thousands of rounds before
-  either crosses the bar.
+  (each client holding one operand) grok sooner than random shards on the anchor
+  and on setup C (1.9×), and at 97 clients on the anchor they grok where random
+  shards mostly do not (5/5 against 2/5); the effect is absent on B and D, and
+  incoherent structure (sharding by target) is the worst partition everywhere.
+  The mechanism is visible early: per-neuron spectral concentration separates the
+  coherent and random arms thousands of rounds before either crosses the bar.
 - **Unstructured heterogeneity mostly does not matter.** A Dirichlet label skew over
-  five orders of magnitude leaves the anchor untouched; the apparent failure at the
+  five orders of magnitude costs the anchor at most 9%; the apparent failure at the
   most skewed setting tracks the smallest shard, seed for seed, and is starvation,
   not heterogeneity. Where heterogeneity does bite, it attacks a different phase
   per architecture: transformers stop memorising, the quadratic MLP memorises and
