@@ -20,6 +20,19 @@ Usage:
     venv/bin/python scripts/package_checkpoints.py --out DIR --groups boundary
     venv/bin/python scripts/package_checkpoints.py --out DIR --dry-run
 
+The archives live at https://huggingface.co/datasets/FedGrok/fedgrok-checkpoints
+(gated, auto-approved), one per campaign group, filed under a folder named for
+the paper axis it supports (num_clients/, local_epochs/, participation/,
+heterogeneity/, mechanism/, legacy/). The release is ADDITIVE: an archive, once
+published, is never renamed, moved or replaced, because its basename is the
+`group` column of `runs_v2.csv` and that is the join key readers rely on. To add
+a campaign, package only its groups here, run `scripts/merge_checkpoint_release.py`
+to assign each new archive its folder and extend the root files (README.md,
+MANIFEST.csv, SHA256SUMS, runs_v2.csv) as strict supersets of the published ones,
+upload the archives to the paths the merged manifest names, then the root files.
+The README this script writes is a starting point for a fresh dataset, not a
+replacement for the published one.
+
 `--groups boundary` is the cheapest useful subset: 4.12 GB, and it is the cell
 RESULTS.md 16.2 reads for the mechanism result, so it makes the paper's strongest
 mechanistic claim reproducible on its own.
@@ -189,15 +202,21 @@ def main():
     write_readme(args.out, rows, total_bytes, total_files)
 
     print(f"\nWrote {len(rows)} archive(s) + MANIFEST.csv + README.md to {args.out}")
-    print("\nNext — publish (both free):")
-    print("  Hugging Face, resumable and built for this:")
-    print("    venv/bin/pip install huggingface_hub")
-    print("    venv/bin/huggingface-cli login")
-    print(f"    venv/bin/huggingface-cli upload-large-folder <user>/fedgrok-checkpoints \\")
-    print(f"        {args.out} --repo-type=dataset")
-    print("  Zenodo, if a citable DOI is wanted: create a record and upload the")
-    print("  same directory (50 GB per record). Copy results/data/runs_v2.csv in")
-    print("  alongside so the run ids resolve to configs without the repo.")
+    print("\nNext — publish to FedGrok/fedgrok-checkpoints (additive; see the module docstring):")
+    print("  1. Merge onto the published root files; this also names each archive's folder:")
+    print("       hf download FedGrok/fedgrok-checkpoints MANIFEST.csv SHA256SUMS \\")
+    print("           --repo-type dataset --local-dir <published>")
+    print(f"       python scripts/merge_checkpoint_release.py --published <published> \\")
+    print(f"           --new {args.out} --out <root>")
+    print("  2. Upload each new archive to the `path` in <root>/MANIFEST.csv, e.g.")
+    print(f"       hf upload FedGrok/fedgrok-checkpoints {args.out}/checkpoints_<group>.tar \\")
+    print("           <folder>/checkpoints_<group>.tar --repo-type dataset")
+    print("  3. Then the four root files:")
+    print("       hf upload FedGrok/fedgrok-checkpoints <root> . --repo-type dataset \\")
+    print("           --include README.md --include MANIFEST.csv --include SHA256SUMS \\")
+    print("           --include runs_v2.csv")
+    print("  Zenodo, if a citable DOI is wanted: one record per campaign (50 GB cap),")
+    print("  with runs_v2.csv alongside so the run ids resolve without the repo.")
 
 
 if __name__ == "__main__":

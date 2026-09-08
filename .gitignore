@@ -32,6 +32,8 @@ paper/*.fdb_latexmk
 paper/*.bbl
 paper/*.blg
 paper/*.pdf
+# The compiled figure-review document; the fig*.pdf beside it are source.
+paper/figures/figures.pdf
 
 # Results: what is committed and what is not.
 #

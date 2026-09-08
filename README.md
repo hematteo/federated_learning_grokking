@@ -133,6 +133,19 @@ tests/         the suite, ~9 min including Flower/Ray integration
 because v1's 870 runs are still cited. They predate the manifest system and are not
 used by anything in `src/`, `scripts/` or `tests/`.
 
+## Data release
+
+Model checkpoints and per-client weights (40 GB, 664 runs) are on Hugging Face at
+[FedGrok/fedgrok-checkpoints](https://huggingface.co/datasets/FedGrok/fedgrok-checkpoints),
+gated with automatic approval. One uncompressed tar per campaign `group`, filed
+under a folder named for the paper axis it supports (`num_clients/`, `local_epochs/`,
+`participation/`, `heterogeneity/`, `mechanism/`); the `group` column of `runs_v2.csv`
+is the join key, and the dataset's `MANIFEST.csv` maps each group to its path and figure. Runs with `checkpoint_every = 0`
+(the strategy comparison, setup A's local-epochs ladder, most centralised
+anchors) have histories here but no weights anywhere. `scripts/package_checkpoints.py`
+builds a campaign's archives; `scripts/merge_checkpoint_release.py` extends the
+published root files without touching existing archives.
+
 ## Statistics
 
 Runs that do not grok within budget are **right-censored**, not dropped and not
