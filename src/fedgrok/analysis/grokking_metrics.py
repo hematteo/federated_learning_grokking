@@ -16,12 +16,36 @@ from typing import List
 import numpy as np
 
 
+def _below(acc, threshold: float) -> bool:
+    """Is `acc` below the bar, counting NaN as below?
+
+    Written as `not (acc >= threshold)` rather than `acc < threshold` because the
+    two differ on NaN, and only one of them is safe here. `nan < threshold` is
+    False, so a NaN test curve finds NO point below the bar, and the
+    sustained-crossing scan in `compute_t_grok` concludes the bar held from the
+    first sample onwards -- reporting `grokked=True` at `t_grok = steps[0]` for a
+    run that measured nothing at all.
+
+    That is not hypothetical: `alpha=1.0` trains on the whole grid and leaves an
+    empty test set, so `compute_accuracy` divides by zero and every test point is
+    NaN. Five banked setup-D runs are recorded that way (RESULTS.md, known
+    issues). A missing measurement must never read as the strongest possible
+    positive result.
+
+    The first-crossing helpers (`compute_t_50`, `compute_t_memo`,
+    `compute_t_first_cross`) test `acc >= threshold` directly, which is already
+    NaN-safe: NaN fails that comparison and the step is correctly skipped.
+    """
+    return not (acc >= threshold)
+
+
 def compute_t_grok(steps: list, test_accs: list, threshold: float = 95.0) -> float:
     """Compute grokking step T_grok.
 
     Returns the smallest step where test accuracy reaches `threshold`
     and never drops below it for the remainder of training.
-    Returns float('inf') if no such step exists.
+    Returns float('inf') if no such step exists, and also if the curve is NaN
+    (no test set / diverged) -- see `_below`.
     """
     if not steps:
         return float("inf")
@@ -29,7 +53,7 @@ def compute_t_grok(steps: list, test_accs: list, threshold: float = 95.0) -> flo
     n = len(steps)
     last_below = -1
     for i in range(n - 1, -1, -1):
-        if test_accs[i] < threshold:
+        if _below(test_accs[i], threshold):
             last_below = i
             break
 
@@ -109,7 +133,7 @@ def count_post_cross_dips(steps: list, test_accs: list, threshold: float) -> int
     if first == float("inf"):
         return 0
     return sum(1 for step, acc in zip(steps, test_accs)
-               if step > first and acc < threshold)
+               if step > first and _below(acc, threshold))
 
 
 def extract_grokking_results(history: dict, threshold: float = 95.0) -> dict:
@@ -153,7 +177,14 @@ def extract_grokking_results(history: dict, threshold: float = 95.0) -> dict:
         # that never left 1% -- and those are different failures. `t_memo` cannot
         # cover this either: at a 99% bar both are inf, as is a cell sitting at
         # 98.2%. Peak is the cheap scalar that orders them.
-        "peak_train_acc": max(train_accs) if train_accs else 0.0,
+        #
+        # Non-finite points are dropped rather than passed to max(), whose result
+        # on a NaN-containing list depends on POSITION: max() keeps its running
+        # value unless the next compares greater, and every comparison with NaN
+        # is False -- so a leading NaN wins and a trailing one loses. The peak
+        # over the finite points is the reading this field is for.
+        "peak_train_acc": max((a for a in train_accs if math.isfinite(a)),
+                              default=0.0),
         "final_ipr": final_ipr,
     }
 

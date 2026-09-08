@@ -34,12 +34,6 @@ class TestFedConfig:
         assert cfg.optimizer == "gd"
         assert cfg.lr == 50.0
 
-    def test_apply_adamw_defaults_works_on_fedconfig(self):
-        cfg = FedConfig(optimizer="adamw")
-        cfg.apply_adamw_defaults()
-        assert cfg.lr == 1e-4
-        assert cfg.weight_decay == 1.0
-
     def test_custom_values(self):
         cfg = FedConfig(
             p=53, num_clients=10, num_rounds=500,

@@ -32,27 +32,60 @@ class TestConfig:
         assert cfg.momentum == 0.0
         assert cfg.output_dir == "results/baselines/centralized"
 
-    def test_apply_adamw_defaults_overrides_when_not_set(self):
+    def test_no_dead_cli_default_machinery(self):
+        """`apply_adamw_defaults` and its _*_set flags are gone.
+
+        They were v1 argparse machinery: the CLI set `_lr_set` when the user
+        passed --lr, and the method filled AdamW defaults for the rest. Nothing
+        on the manifest path ever called it, so an adamw spec that omitted `lr`
+        silently inherited GD's 50.0. It could not be wired in either -- a spec
+        has no "was it set" flag -- so the check moved into build_config, where
+        the spec is still visible. See TestAdamWNeedsAnExplicitLR.
+        """
         cfg = Config(optimizer="adamw")
-        cfg.apply_adamw_defaults()
-        assert cfg.lr == 1e-4
-        assert cfg.weight_decay == 1.0
-        assert cfg.epochs == 5000
+        assert not hasattr(cfg, "apply_adamw_defaults")
+        for flag in ("_lr_set", "_wd_set", "_epochs_set"):
+            assert not hasattr(cfg, flag)
 
-    def test_apply_adamw_defaults_preserves_user_values(self):
-        cfg = Config(optimizer="adamw", lr=0.001, _lr_set=True,
-                     weight_decay=0.5, _wd_set=True,
-                     epochs=1000, _epochs_set=True)
-        cfg.apply_adamw_defaults()
-        assert cfg.lr == 0.001
-        assert cfg.weight_decay == 0.5
-        assert cfg.epochs == 1000
 
-    def test_apply_adamw_defaults_noop_for_gd(self):
-        cfg = Config(optimizer="gd", lr=50.0)
-        cfg.apply_adamw_defaults()
-        assert cfg.lr == 50.0
-        assert cfg.weight_decay == 0.0
+class TestAdamWNeedsAnExplicitLR:
+    """An AdamW spec must state its learning rate.
+
+    Config's lr=50.0 is GD's (Gromov's) and diverges under AdamW, and nothing
+    downstream catches the mismatch: check_decay_stability returns early at
+    weight_decay=0, so the run proceeds, diverges to NaN and banks as an
+    ordinary censored result.
+    """
+
+    def test_adamw_without_lr_raises(self):
+        from fedgrok.manifest import build_config
+        with pytest.raises(ValueError, match="must set `lr`"):
+            build_config({"mode": "centralized", "optimizer": "adamw", "p": 7})
+
+    def test_adamw_with_lr_is_fine(self):
+        from fedgrok.manifest import build_config
+        cfg = build_config({"mode": "centralized", "optimizer": "adamw",
+                            "lr": 1e-3, "p": 7})
+        assert cfg.lr == 1e-3
+
+    def test_gd_may_rely_on_the_default(self):
+        """GD's default IS 50.0, so omitting lr there is the intended usage."""
+        from fedgrok.manifest import build_config
+        assert build_config({"mode": "centralized", "p": 7}).lr == 50.0
+
+    def test_the_guard_covers_federated_specs_too(self):
+        from fedgrok.manifest import build_config
+        with pytest.raises(ValueError, match="must set `lr`"):
+            build_config({"mode": "federated", "optimizer": "adamw", "p": 7})
+
+    def test_every_banked_adamw_manifest_spec_satisfies_it(self):
+        """The guard closes a trap; it must not invalidate banked work."""
+        import glob
+        from fedgrok.manifest import load_manifest
+        missing = [(m, s.get("id")) for m in glob.glob("manifests/*.jsonl")
+                   for s in load_manifest(m)
+                   if s.get("optimizer") == "adamw" and "lr" not in s]
+        assert missing == []
 
 
 # ── GrokNet ───────────────────────────────────────────────────────────────────
@@ -115,6 +148,52 @@ class TestGrokNet:
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
+class TestSplitGuard:
+    """alpha must leave both sides of the split non-empty.
+
+    alpha=1.0 trains on the whole grid and leaves no test set. Nothing
+    downstream fails loudly on that: compute_accuracy divides by zero, every
+    test point is NaN, and NaN used to pass compute_t_grok's sustained-crossing
+    scan, banking the run as grokked=True at t_grok=0.
+    """
+
+    @pytest.mark.parametrize("alpha", [1.0, 1.5, 0.0, -0.1])
+    def test_degenerate_alpha_raises(self, alpha):
+        from fedgrok.data.modular import split_indices
+        with pytest.raises(ValueError, match="alpha"):
+            split_indices(100, alpha, seed=0)
+
+    def test_alpha_too_small_for_the_grid_raises(self):
+        # 0.001 * 100 truncates to 0 training samples.
+        from fedgrok.data.modular import split_indices
+        with pytest.raises(ValueError, match="empty"):
+            split_indices(100, 0.001, seed=0)
+
+    def test_valid_alpha_is_unchanged(self):
+        """The guard must not perturb the RNG stream banked runs depend on."""
+        from fedgrok.data.modular import split_indices
+        train, test = split_indices(100, 0.5, seed=0)
+        expected = np.random.RandomState(0).permutation(100)
+        assert np.array_equal(train, expected[:50])
+        assert np.array_equal(test, expected[50:])
+
+    def test_federated_split_leaves_the_rng_where_partitioners_expect_it(self):
+        """split_indices draws exactly one permutation, guard or no guard.
+
+        make_federated_datasets hands the SAME RandomState to the partitioners
+        afterwards, so any change in how many draws the split consumes would
+        silently re-assign every IID and Dirichlet shard.
+        """
+        from fedgrok.data.modular import split_indices
+        rng = np.random.RandomState(0)
+        split_indices(100, 0.5, rng=rng)
+        after_split = rng.permutation(10)
+
+        reference = np.random.RandomState(0)
+        reference.permutation(100)          # the one draw the split is allowed
+        assert np.array_equal(after_split, reference.permutation(10))
+
+
 class TestDataset:
     def test_shapes(self, small_cfg):
         x_train, y_train, x_test, y_test = make_dataset(small_cfg)
@@ -169,9 +248,15 @@ class TestDataset:
             assert y.max() < 7
 
     def test_addition_correctness(self):
-        """Spot-check: for addition mod p, verify labels match (n+m) mod p."""
-        cfg = Config(p=5, alpha=1.0, hidden_width=8, seed=0)
-        x, y, _, _ = make_dataset(cfg)
+        """Spot-check: for addition mod p, verify labels match (n+m) mod p.
+
+        Reads the unsplit grid directly. This used to ask make_dataset for
+        alpha=1.0 to get every pair onto the train side, which split_indices now
+        rejects -- alpha=1.0 leaves no test set, and a run with no test set
+        cannot measure grokking. The grid is what this test actually wants.
+        """
+        x, y, _nn, _mm = build_encoded_grid("addition", 5)
+        x, y = torch.from_numpy(x), torch.from_numpy(y)
         p = 5
         for i in range(len(x)):
             # Decode n and m from one-hot

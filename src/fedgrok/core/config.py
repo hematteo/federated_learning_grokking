@@ -50,17 +50,15 @@ class Config:
     save_weights: bool = False           # save final model weights
     checkpoint_every: int = 0            # save checkpoints every N epochs (0 = disabled)
 
-    # Set to True internally when user explicitly passes a value
-    _lr_set: bool = False
-    _wd_set: bool = False
-    _epochs_set: bool = False
-
-    def apply_adamw_defaults(self):
-        """Apply sensible AdamW defaults if user didn't override them."""
-        if self.optimizer == "adamw":
-            if not self._lr_set:
-                self.lr = 1e-4
-            if not self._wd_set:
-                self.weight_decay = 1.0
-            if not self._epochs_set:
-                self.epochs = 5_000
+    # NOTE: `apply_adamw_defaults()` and its `_lr_set` / `_wd_set` / `_epochs_set`
+    # companions used to live here. They were v1 CLI machinery: argparse set the
+    # flags when the user passed --lr / --wd / --epochs, and the method then
+    # filled AdamW defaults for whatever was left. Nothing on the v2 path ever
+    # called it -- only the tests did -- so it was a safety net that had been
+    # detached from the thing it was catching.
+    #
+    # It also could not simply be wired in. A manifest spec has no "was it set"
+    # flag; "set" means "the key is in the dict", so calling the method after
+    # build_config would have overwritten every explicitly chosen lr with 1e-4.
+    # The check now lives in `fedgrok.manifest.build_config`, which can still see
+    # the spec, and it rejects rather than guesses.

@@ -94,14 +94,23 @@ def build(csv_path, hist_root, dataset, model, groups, max_points):
             "ci": [s["t_grok_ci_low"], s["t_grok_ci_high"]] if s["n_grokked"] else None,
             "budget": max(durations) if durations else None,
             "threshold": float(runs[0]["grok_threshold"]),
-            "final_test": max(float(r["final_acc"]) for r in runs),
+            # Finite values only: alpha>=1.0 rows carry final_acc = nan (no
+            # test set), and max() over a NaN-containing sequence returns a
+            # position-dependent answer.
+            "final_test": max((v for v in (float(r["final_acc"]) for r in runs)
+                               if math.isfinite(v)), default=float("nan")),
             "series": series,
         })
 
     # alpha is the fraction of the grid used for TRAINING, so alpha=1.0 leaves no
-    # test set at all. compute_accuracy over zero samples returns NaN rather than
-    # raising, so the run completes and looks like a censored cell. Flag it: the
-    # test series is undefined by construction, not a measured failure.
+    # test set at all, and compute_accuracy over zero samples returns NaN rather
+    # than raising. Such a run does NOT look like a censored cell, which is what
+    # this comment used to claim -- it looks like the opposite. NaN never
+    # compared below the bar, so the old sustained-crossing scan reported the bar
+    # as held from step 0 and banked `grokked=True, t_grok=0`. Five setup-D rows
+    # are recorded that way and are still in the CSV. `split_indices` now rejects
+    # the spec and `compute_t_grok` treats NaN as below the bar, so no new run
+    # can join them; the flag keeps the banked five visibly marked.
     for r in rungs:
         r["no_test"] = r["alpha"] >= 1.0
 

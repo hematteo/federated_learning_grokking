@@ -112,8 +112,30 @@ def split_indices(n_samples: int, alpha: float, seed: int = None, rng=None):
         if seed is None:
             raise ValueError("split_indices requires either `seed` or `rng`")
         rng = np.random.RandomState(seed)
-    perm = rng.permutation(n_samples)
+
+    # alpha must leave BOTH sides non-empty. alpha >= 1.0 trains on the whole
+    # grid and leaves no held-out set, which fails loudly nowhere downstream:
+    # compute_accuracy divides by zero, every test point becomes NaN, and NaN
+    # used to pass the sustained-crossing scan in compute_t_grok because
+    # `nan < threshold` is False. The run was then banked as `grokked=True,
+    # t_grok=0` -- a run that measured nothing, recorded as the strongest
+    # possible result. Five setup-D rows in `x_d_alpha_high` are exactly that
+    # (RESULTS.md, known issues). compute_t_grok is guarded too now, but the
+    # spec should never have been runnable in the first place.
+    #
+    # The permutation is drawn AFTER the check, and exactly once either way, so
+    # the RNG stream the federated partitioners inherit is unchanged.
     n_train = int(alpha * n_samples)
+    if n_train <= 0 or n_train >= n_samples:
+        raise ValueError(
+            f"alpha={alpha} gives n_train={n_train} of {n_samples} samples, "
+            f"leaving one side of the split empty. alpha is the TRAINING "
+            f"fraction and must satisfy 0 < alpha < 1; a run with no held-out "
+            f"set cannot measure generalisation, which is the quantity every "
+            f"grok metric is defined on."
+        )
+
+    perm = rng.permutation(n_samples)
     return perm[:n_train], perm[n_train:]
 
 

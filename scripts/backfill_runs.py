@@ -40,6 +40,7 @@ column. Runs whose history is missing are reported and skipped, not guessed at.
 import argparse
 import glob
 import json
+import math
 import os
 import sys
 
@@ -123,7 +124,11 @@ def _fill_outcomes(row, history, bar=None):
 
     out = {}
     if "peak_train_acc" not in row:
-        out["peak_train_acc"] = max(train_accs)
+        # Finite points only, matching extract_grokking_results: max() over a
+        # list containing NaN returns a position-dependent answer, because every
+        # comparison with NaN is False.
+        out["peak_train_acc"] = max(
+            (a for a in train_accs if math.isfinite(a)), default=0.0)
 
     # t_first_cross / post_grok_dips need the bar the run was scored at, which is
     # recorded per row precisely because it varies by dataset.

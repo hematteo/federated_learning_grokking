@@ -29,6 +29,36 @@ class TestTGrok:
     def test_empty_input(self):
         assert compute_t_grok([], [], threshold=95.0) == float("inf")
 
+    def test_all_nan_is_censored_not_instant_grokking(self):
+        """A NaN curve must not read as "grokked at step 0".
+
+        `nan < threshold` is False, so the sustained-crossing scan used to find
+        no point below the bar and conclude it held from the first sample. An
+        empty test set (alpha=1.0) produces exactly this, and five banked
+        setup-D runs are recorded grokked=True / t_grok=0 because of it.
+        """
+        steps = list(range(0, 500, 100))
+        accs = [float("nan")] * 5
+        assert compute_t_grok(steps, accs, threshold=95.0) == float("inf")
+        # t_first_cross was already correct; the two must now agree.
+        assert compute_t_first_cross(steps, accs, 95.0) == float("inf")
+
+    def test_nan_after_crossing_breaks_the_sustained_bar(self):
+        # Diverging to NaN after generalising is a failure, not a pass.
+        steps = [0, 100, 200, 300]
+        accs = [1.0, 96.0, 97.0, float("nan")]
+        assert compute_t_grok(steps, accs, threshold=95.0) == float("inf")
+
+    def test_nan_before_crossing_does_not_shift_t_grok(self):
+        steps = [0, 100, 200, 300]
+        accs = [float("nan"), 1.0, 96.0, 97.0]
+        assert compute_t_grok(steps, accs, threshold=95.0) == 200
+
+    def test_nan_counts_as_a_post_cross_dip(self):
+        steps = [0, 100, 200, 300]
+        accs = [1.0, 96.0, float("nan"), 97.0]
+        assert count_post_cross_dips(steps, accs, 95.0) == 1
+
 
 class TestT50:
     def test_onset_detected(self):

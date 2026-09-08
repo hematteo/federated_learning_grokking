@@ -66,6 +66,20 @@ def build_config(spec: dict):
             f"{sorted(unknown)}"
         )
 
+    # An AdamW spec must state its own learning rate. Config's lr=50.0 default is
+    # GD's -- Gromov's -- and it is catastrophic under AdamW, but nothing
+    # downstream catches it: check_decay_stability returns early whenever
+    # weight_decay is 0, so the run proceeds, diverges, and banks NaN accuracies
+    # as an ordinary censored result. Every one of the 1,290 banked AdamW specs
+    # sets lr, so this closes a trap rather than fixing damage.
+    if spec.get("optimizer") == "adamw" and "lr" not in spec:
+        raise ValueError(
+            "An optimizer='adamw' spec must set `lr` explicitly. The default "
+            f"lr={cls.lr} is GD's and diverges under AdamW; published AdamW "
+            "grokking configs sit at 1e-4 (Omnigrok) to 1e-3 (Nanda). Nothing "
+            "downstream rejects the mismatch, so it has to be caught here."
+        )
+
     kwargs = {k: v for k, v in spec.items() if k in fields}
     return cls(**kwargs)
 
