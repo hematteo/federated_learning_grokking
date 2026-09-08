@@ -18,6 +18,28 @@ The build changelog that used to occupy the middle of this file — nine
 Per-sweep result tables that duplicated `RESULTS.md` have gone the same way; the
 section numbers in the table above are the citable ones.
 
+## Current state — 2026-09-07
+
+**1,685 runs banked · ~1,366 machine-hours · 0 failed runs all campaign.**
+
+The paper's three FL axes ran 2–4 Sep on `cam-gpu-acs` (gxp-l4-0, 2× L4, 8
+slots): `t5_local_epochs` 48, `t3a_dirichlet_setups` 72, `t5_participation` 30,
+plus `x_e50_long` 6 — **156/156, 0 failures, 401 slot-h**. Readings in RESULTS
+§19–§23; the run-by-run status and the reproducibility to-do are `RUNS_TODO.md`
+entries 4–8. Headlines: D reaches a stationary federated equilibrium that
+memorises and never generalises (§22, 8× budget); memorisation cost scales with
+local work on transformers and not on MLPs (§19); the anchor is immune to
+unstructured heterogeneity once starvation is controlled, contradicting §18.1
+(§20); partial participation is free in rounds everywhere but MNIST (§21); and
+**runs are not reproducible run-to-run** (§23) — zero effect on D, outcome-flipping
+on C. Nothing from this sweep is committed yet.
+
+**Hardware note.** The 8× L4 box is available again and `cl-alloc-gpu` assigns
+each user one card by `UID % 8` (mine is GPU 1) plus that card's NUMA-node CPUs.
+That is a convention, not a reservation; GPUs 1–2 were used with the group's two
+other active users at ~2.5 cores between them. Per-round cost is near-linear in
+E, not the mild scaling `build_manifests.estimate_minutes` assumes.
+
 ## Current state — 2026-08-24
 
 **1,529 runs banked · ~965 machine-hours · 0 failed runs all campaign.**
@@ -60,7 +82,7 @@ boundaries in this project were manufactured by getting this wrong.
 |---|---|
 | Branch | `v2-multisetup` (branched from `main` @ `41c3fa8`; `main` has nothing this lacks) |
 | Frozen reference | tag `v1-single-setup` — the state that produced the 32 figures in `results/figures/` |
-| Tests | **566 collected** (`venv/bin/python -m pytest tests/ -q`, ~9 min incl. FL integration; the non-FL half is ~45 s) |
+| Tests | **592 collected** (`venv/bin/python -m pytest tests/ -q`, ~9 min incl. FL integration; the non-FL half is ~45 s) |
 | Runs banked | **1,529** result JSONs, and `results/data/runs_v2.csv` matches at 1,529 (1,016 grokked, 513 censored). Plus 870 v1 runs in `runs.csv`. ~965 machine-hours |
 | Setups | A quad-MLP/mod-97 · A′ quad-MLP/mod-97/AdamW (**measured**, §13.3) · B transformer/mod-113 · C transformer/S₅ · D quad-MLP/S₅ · E MLP/MNIST-1k. **D′ dropped** — the gate that would have required it opened (§13.7) |
 | FL algorithms | FedAvg, FedProx, FedAvgM, FedYogi, FedAdam (native) + SCAFFOLD (adapted, **raises under AdamW by design**) |
@@ -239,6 +261,90 @@ Above K=20, cap the client population instead of lowering `--per-gpu`:
 `FEDGROK_GPU_CLIENT_CAP=8` (see the README's VRAM section). Ray queues rather than
 deadlocks when clients outnumber cores, so an uncapped K=50 run is slow, not
 broken — 50 client processes on 16 cores contend instead of computing.
+
+## Correctness fixes, 2026-08-31
+
+Four defects found by reading the code rather than the results. All four are
+fixed with tests; the suite is **592 collected**.
+
+- **NaN passed the grok bar.** `compute_t_grok` scanned for the last point
+  *below* the threshold, and `nan < threshold` is False — so an all-NaN test
+  curve reported the bar as held from the first sample: `grokked=True,
+  t_grok=0`. `alpha=1.0` produces exactly that (no held-out set → division by
+  zero in `compute_accuracy`), and five setup-D rows are banked that way.
+  Now: `split_indices` rejects an α that empties either side of the split,
+  `_below()` counts NaN as below the bar, and `x_d_alpha_high` stops at 0.975.
+- **The result-JSON writer emitted invalid JSON.** `_write_json_atomic`
+  serialised `inf` as `"inf"` but left NaN as a bare `NaN` token, which is a
+  Python extension no other parser accepts — and `final_ipr` is NaN on every
+  non-modular run, so 1,038 of the 1,529 banked files carry one. It is invisible
+  from inside the project, because everything that reads them is Python. The
+  writer now handles all three non-finite values and sets `allow_nan=False`, so
+  **new** runs are portable.
+  **The 1,038 banked files are deliberately left as they are.** The exposure is
+  narrow — the JSONs are committed, so it only bites a non-Python consumer of a
+  clone, and nothing in the repo is one. `scripts/repair_result_json.py` will
+  rewrite them (idempotent, `--dry-run` first) if the data is ever going
+  somewhere that needs it. `runs_v2.csv` is byte-identical either way, so no
+  analysis moves whichever is chosen.
+- **Client minibatch order was unseeded.** `torch.manual_seed(cfg.seed)` runs in
+  the driver; clients are Ray actors with their own unseeded generators. All 94
+  banked setup-E federated runs are affected, and asymmetrically — centralized
+  MNIST *is* seeded. Now a private CPU generator seeded per
+  (run, client, round). Deliberately created only on the minibatch branch, so
+  the full-batch path stays bit-identical to every banked run (tested).
+- **`strategy="feddyn"` silently ran FedAvg.** It was in FedConfig's Literal with
+  no branch in `_build_strategy`, so it fell through to the default return and
+  banked a row labelled `feddyn`. Typos did the same. `_build_strategy` now
+  raises on anything unrecognised, and `feddyn` is out of the Literal
+  (`feddyn_alpha` stays — it is in the schema of every banked row).
+
+Lower severity, same pass — all guards against states no current
+configuration can reach, added because this project's expensive mistakes have
+all been silent-wrong rather than loud-wrong: `_optimizer_cache` keyed on
+lr/wd/optimizer/momentum as well as `_client_key`; `_load_ndarrays_into` and
+SCAFFOLD's `apply_correction` raise on length/shape mismatch instead of letting
+`zip` truncate silently.
+
+**Not changed, on purpose.** `bootstrap_ci` takes its lower bound as the α/2
+quantile of the FINITE resamples, which is not the α/2 quantile of the full
+distribution once some resamples are inf. Rescaling by 1/(1-frac_inf) is closer,
+but measured across all 204 real cells it moves 3 of them by 1.1–2.1% — and the
+rescaled version is not exact either, since numpy indexes quantiles at q*(M-1).
+The existing estimator errs toward a WIDER interval, which is the safe direction.
+Left alone rather than perturbing a published statistic for a cosmetic gain.
+
+A second pass over the modules the first did not reach found two more traps, both
+latent — no banked run is affected by either:
+
+- **`Config.apply_adamw_defaults` was a safety net detached from the path it
+  guarded.** It was v1 argparse machinery: the CLI set `_lr_set` when the user
+  passed `--lr`, and the method filled AdamW defaults for the rest. Nothing on
+  the manifest path ever called it, and it *could not* be wired in — a spec has
+  no "was it set" flag, so calling it after `build_config` would have overwritten
+  every deliberately chosen lr with 1e-4. Consequence: an `optimizer="adamw"`
+  spec omitting `lr` inherited **GD's 50.0** and nothing rejected it —
+  `check_decay_stability` returns early at `weight_decay=0`, so the run would
+  proceed, diverge, and bank NaN accuracies as an ordinary censored result. The
+  method and its three flags are deleted; `build_config` now requires an explicit
+  `lr` under AdamW. A test asserts all 1,290 banked AdamW specs already satisfy
+  it.
+- **The centralized loop never called `model.eval()`.** The federated
+  `evaluate_fn` does. No model here has dropout, batch norm, or (deliberately, in
+  GrokFormer) LayerNorm, so the two loops agree today — but the asymmetry was
+  undocumented, and it is the kind that surfaces only once a model gains a
+  stochastic layer and *only the centralized numbers move*. The one remaining
+  difference is noted in place: centralized `train_acc` still comes from the
+  training forward pass, federated recomputes it under eval().
+
+Also: `backfill_runs.py` and `plotting/alpha_ladder.py` had the same
+position-dependent `max()` over NaN that `extract_grokking_results` did;
+`launch_sweep.py` exited 0 after a sweep in which every run failed, which for a
+detached `nohup` sweep is the only status signal there is.
+
+**No published number moves.** Every fix either guards a state no banked run is
+in, or corrects a computation whose inputs no banked run has. `runs_v2.csv` is
+byte-identical; regenerating it with `collect_runs.py` confirms that.
 
 ## Findings worth not re-deriving
 

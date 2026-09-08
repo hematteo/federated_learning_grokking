@@ -1,6 +1,6 @@
 # Results — federated grokking
 
-Everything measured, as of 2026-08-24. Branch `v2-multisetup`.
+Everything measured, as of 2026-09-07. Branch `v2-multisetup`.
 
 Companion documents: `PROGRESS.md` (what is built and what remains) and `plans/`
 (index in `plans/README.md`) — the multi-setup campaign and the boundary campaign
@@ -8,7 +8,7 @@ are both under `plans/closed/`. They moved into the repo on 2026-08-17; earlier
 revisions of this file cited them at `~/.claude/plans/`, which no longer resolves.
 
 **Data behind every number here:**
-`results/data/runs_v2.csv` (1,529 v2 runs) and `results/data/runs.csv` (870 v1 runs,
+`results/data/runs_v2.csv` (1,685 v2 runs) and `results/data/runs.csv` (870 v1 runs,
 recovered from logs). Both are committed. Regenerate any table with:
 
 ```bash
@@ -138,8 +138,282 @@ partially censored.
     — so **systematic disagreement delays grokking and sampling noise does
     not** (§18.4).
 
+20. **Federation can drive a grokking model into a stable equilibrium that
+    memorises perfectly and never generalises** (§22). Setup D at E=50: 0/3 at
+    250,000 steps *and* 0/3 at 2,000,000; train 100% from step ~3,000, test
+    80–83%, weight norm 101.5 → 101.6 and drift/round 8.0 → 8.0 across 1.75M
+    steps, train loss never below 0.055. Not a clock running out — a fixed point
+    with the gradient alive. The same signature appears on D's Dirichlet axis.
+    The first breakdown in the project to *survive* a longer budget.
+
+21. **On transformers, memorisation cost scales linearly with local work; on
+    full-batch quadratic MLPs it does not — and decay is not why** (§19). At
+    matched compute, B's `t_memo` goes 1,300 → 12,700 over E = 5 → 50 (9.8× on
+    10×) and C's 3,200 → 32,500; A's and D's are flat. D carries ten times B's
+    weight decay. §14.3's decay clock does not explain the E axis.
+
+22. **The anchor is immune to unstructured heterogeneity** (§20). K=10, dir_α over
+    five orders of magnitude, 18/18 grokked, `t_memo` 3,600–3,900, `t_first_cross`
+    12,900 → 14,100 (1.09×). **§18.1's 2.01× is withdrawn as a heterogeneity
+    result**: it was measured at K=20/50 where §18.2 had already shown the low
+    rungs were shard starvation; remove the starvation and the effect is gone.
+
+23. **Heterogeneity attacks a different phase on each architecture** (§20). It
+    stops the transformers *memorising* (B: peak train 20–31% below dir_α=0.5, a
+    step; C: graded) and lets D memorise while stopping it *generalising* (0/3 at
+    dir_α = 0.5 and 1.0 with train at 100%, test 70–82%), at a threshold one to
+    two orders stricter. E, like A, is unaffected. "Heterogeneity costs time"
+    is not a claim that can be stated once for the study.
+
+24. **Partial participation is free per round on every setup except MNIST**
+    (§21). Memorisation rounds are flat in f everywhere (A: 740/760/800). B's
+    delay shortens 1.8× in rounds; E degrades, 3/3 → 0/3 and 94% → 72% final —
+    measured at its degenerate K=20 rung, so within-configuration only. Read on
+    the rounds axis: `total_steps` accumulates E·f per round and every
+    step-denominated number halves with f by construction.
+
+25. **Runs are not reproducible run-to-run** (§23). Same config and seed, two
+    runs: D differs by 0.00 on every seed; C by 12.7 / 0.0 / 7.7 points of peak
+    train accuracy against a between-seed spread of 13.4. Float summation order
+    in Flower's arrival-ordered `aggregate()`, amplified by dynamics near the
+    threshold. **Every quantitative claim on C is withheld** until aggregation is
+    made deterministic or C is run at n≈10. "Seeds" should read "runs".
+
 Open: whether K=97 IID *fails* or is merely *slow* — both successes landed within
 5% of the budget ceiling, so that cell is not yet resolved.
+
+---
+
+## 23. Reproducibility — the harness is not run-to-run deterministic
+
+The long-budget re-run of the E=50 cells (§22) duplicated six configurations at
+a second `num_rounds`, which is the first time this project has had two runs of
+the same config *and* seed. `num_rounds` touches nothing but logging and the
+server's round count, and there is no learning-rate schedule, so the first 4,000
+rounds should be identical. Peak train accuracy over the overlapping 200,000
+steps:
+
+| setup | seed | run 1 (200k budget) | run 2 (1M/2M budget) | run-to-run \|Δ\| |
+|---|---|---|---|---|
+| D | 42 / 123 / 456 | 100.0 / 100.0 / 100.0 | 100.0 / 100.0 / 100.0 | **0.00 / 0.00 / 0.00** |
+| C | 42 / 123 / 456 | 86.6 / 100.0 / 86.9 | 99.3 / 100.0 / 79.2 | **12.72 / 0.00 / 7.65** |
+
+C's between-seed spread on the same statistic is 13.40. **On C, rerunning the
+seed is as different as changing it.** Seed 456 reaches 86% train in one run and
+26% in the other at 75,000 steps.
+
+**What is ruled out**, in code: the client training loop draws no random numbers
+on C (`batch_size=None`, the full-batch path the loop comments call
+"RNG-identical"); where minibatching is used it is seeded per
+`(seed, partition_id, server_round)`; initialisation is `torch.manual_seed`ed in
+the driver; `probes.py`, `nonabelian.py` and `grokking_metrics.py` contain no
+`rand`, `shuffle`, `permutation` or `Generator`. Eval cadence therefore cannot
+touch the trajectory — which also clears §19's design, where `eval_every` scales
+with E.
+
+**What remains** is floating-point ordering, twice over. Flower's `aggregate()`
+computes `reduce(np.add, layer_updates) / total`, a sequential float32 sum in the
+order results arrive from Ray, and nothing in `training/federated.py` sorts them
+(the only `sorted()` is over probe names). Summing ten GrokFormer-sized float32
+layers in 201 orders gives 200 distinct results, max |Δ| 1.8e-7 (~1.5 ulp). And no
+`torch.use_deterministic_algorithms`, `cudnn.deterministic` or
+`CUBLAS_WORKSPACE_CONFIG` appears anywhere in `src/`. The perturbation is injected
+every round; whether it matters is set by the local dynamics. D is contractive —
+it falls into the same 80% attractor from any nearby start — and C sits at its
+threshold, where the same noise decides whether a seed memorises at all.
+
+PROGRESS.md records the equivalence harness seeing `|Δ| < 1e-5` and calling it
+"fp32 noise = OK". The measurement was right; the conclusion is not safe for a
+setup near a critical point.
+
+> **Consequences.** (1) Each run is still a draw from the trajectory
+> distribution, so "k of n grokked", the KM medians and the bootstrap intervals
+> estimate what they claim to; what breaks is any claim whose effect is
+> comparable to the noise. (2) On C that is every quantitative claim in §19–§21.
+> On D the plateau reproduces exactly. Everything in §19–§22 stated as a result
+> has an effect many times the noise. (3) The statistics language should say
+> *runs*, not *seeds*: for C the seed carries no information. (4) §11's "B's
+> seed variance is intrinsic and bimodal" may be this effect wearing a seed
+> label; it needs the duplicate-run test on B. (5) The fix and the C decision
+> are RUNS_TODO's reproducibility entry.
+
+## 22. Setup D reaches a federated equilibrium that memorises and never generalises
+
+`x_e50_long`, 6 runs, 65 slot-h, 2026-09-04. D at E=50 was 0/3 at 250,000 steps
+with train at 100% and flat slopes — exactly the shape eight earlier boundaries
+had before dissolving into censoring. It was re-run at **2,000,000 steps**, eight
+times the budget.
+
+| seed | `t_memo` | test @250k | @1M | @2M | train loss @250k → 2M | weight norm | drift/round |
+|---|---|---|---|---|---|---|---|
+| 42 | 3,500 | 78.9 | 80.8 | **80.5** | 0.067 → 0.062 | 101.6 → 101.8 | 8.00 → 7.96 |
+| 123 | 2,500 | 82.3 | 80.2 | **82.3** | 0.065 → 0.061 | 101.5 → 101.6 | 8.01 → 7.98 |
+| 456 | 3,000 | 80.1 | 83.0 | **82.6** | 0.077 → 0.069 | 101.2 → 101.5 | 8.03 → 8.00 |
+
+Eight times the budget bought +1.6, +0.0 and +2.5 points; two final-quarter
+slopes are negative. Every measurable quantity is stationary to within 1% over
+1.75 million steps. **This is not the mechanism behind the project's other
+genuine negative** (RUNS_TODO entry 3: B at wd=0, where fp32 train loss
+underflowed to exactly 0.0 and nothing could move): here train loss never falls
+below 0.055, the gradient is alive, decay at wd=1.0 is alive, each round's 50
+local epochs drift the clients ~8 units and averaging pulls them back — and the
+forces balance. A fixed point of federated AdamW on the quadratic MLP, with the
+training set fit at 100% and a representation that generalises to 82%.
+
+**The same signature appears on an independent axis.** D's Dirichlet stalls at
+dir_α=1.0 (§20, 250,000 steps, E=5) show drift constant at 1.26–1.28, weight
+norm 132–135 barely moving, train 100%, test 74.9–82.3% flat from ~175,000
+steps. Two axes that share nothing but the setup reach the same state, which is
+what promotes this from an observation about a cell to a property of the setup.
+
+> **Consequences.** The K-axis story (§14.3) is that federation on AdamW setups
+> slows *memorisation* until the clock runs out. This is different and sharper:
+> memorisation completes and generalisation is *prevented* by a stable
+> equilibrium. It is the "federated breakdown with memorisation intact" that
+> `p1_k_collapse_budget`'s decision rule named, and it belongs in the paper as a
+> positive result. It is a setup-D result: A (GD, wd=0) and E show no such mode
+> on either axis, B and C fail by not memorising. Whether the equilibrium belongs
+> to S₅ or to AdamW-on-a-quadratic-MLP is the A-vs-D confound PROGRESS records as
+> a stated limitation, and this result makes that limitation expensive. SCAFFOLD
+> Option I, once written, should be tested on this cell first.
+
+## 21. exp4b on five setups — partial participation is free per round, except on MNIST
+
+`t5_participation`, 45 specs, 30 run (15 banked controls), 134 slot-h,
+2026-09-03/04. K=20, iid, E=5, f ∈ {1.0, 0.5, 0.25} → 20 / 10 / 5 clients per
+round; rounds scale as 1/f so every cell reaches its control's total gradient
+work. A is re-run at K=20 rather than reusing §18.3's K=50 ladder, so the panel
+is matched.
+
+**Read this axis in rounds.** `total_steps` accumulates E·f per round, so a run
+at f=0.25 books a quarter of the work per round *by construction* and every
+step-denominated quantity halves as f halves. A mid-sweep reading that called
+that an acceleration was wrong. Medians over 3 runs, in rounds:
+
+| setup | f=1.0 memo / first-cross / delay | f=0.5 | f=0.25 | final test |
+|---|---|---|---|---|
+| A | 740 / 2,660 / **1,920** | 760 / 2,680 / **1,920** | 800 / 2,720 / **1,920** | 100 / 100 / 100 |
+| B | 720 / 18,740 / 18,020 | 720 / 17,320 / 16,600 | 800 / 10,880 / **10,080** | 100 / 100 / 100 |
+| C | 1,460 / 1,580 / 120 | 1,560 / 1,600 / 40 | 1,200 / 1,200 / 0 | 100 / 100 / 100 |
+| D | 2,960 / 18,860 / 15,900 | 3,000 / 21,360 / 18,360 | 2,960 / 18,640 / 15,680 | 89 / 89 / 93 |
+| E | 260 / 2,240 / 1,980 | 240 / 2,280 / 2,040 | 320 / 2,560 / 2,240 | **94 / 89 / 72** |
+
+**Memorisation is paced by aggregation rounds, not gradient steps, on every
+setup** — flat in f within 10% everywhere. A's delay is 1,920 rounds at every f.
+Two things move: **B's delay shortens 1.8×** at f=0.25 (one setup, with a 2–3×
+seed spread, so moderate), and **E degrades** — held 3/3 → 1/3 → 0/3 and final
+test 93.9 → 89.1 → 71.6%, the first cost of subsampling anywhere in the study.
+E's cell is the degenerate K=20 rung (one full-batch step per local epoch); the
+degeneracy is constant across f so the within-setup effect stands, but it is
+not shown to survive a non-degenerate K (§10). C's delay is ≈0 throughout, so
+its index is noise, and its numbers are withheld regardless (§23).
+
+> §18.3's anchor result (flat in rounds at K=50) now holds at K=20 too, and on
+> B, C and D. "Sampling noise averages out" (§18.4) generalises — with the MNIST
+> exception recorded.
+
+## 20. exp3a on five setups — heterogeneity has a threshold, a phase, and an architecture
+
+`t3a_dirichlet_setups`, 87 specs, 72 run (15 banked 0.5 rungs), 137 slot-h,
+2026-09-02/03. K=10, E=5, dir_α ∈ {0.01, 0.1, 0.5, 1, 10, 1000} at each setup's
+exp3b working point and budget. Partitions were built and inspected before
+launch: minimum shard at dir_α=0.01 is 116–184 (A), 298–337 (B), 386–515 (C),
+194–398 (D) — an order of magnitude clear of the ≤2 that made §18.2's tail a
+starvation artifact. E has 10 classes: 0.01 is infeasible and at 0.1 its minimum
+shards are 5 / 25 / 56 against `batch_size=100`, so E's low rungs *are* in the
+starvation regime and are labelled so. Held / median peak train / median
+`t_first_cross`:
+
+| dir_α | A | B | C | D | E |
+|---|---|---|---|---|---|
+| 0.01 | 3/3 · 100 · 14,100 | **0/3 · 20 · ∞** | **0/3 · 59 · ∞** | **0/3 · 5 · ∞** | — |
+| 0.1 | 3/3 · 100 · 13,400 | **0/3 · 31 · ∞** | 2/3 · 97 · 29,950 | **0/3 · 60 · ∞** | 3/3 · 100 · 4,100 |
+| 0.5 | 3/3 · 100 · 13,000 | 3/3 · 100 · 5,300 | 3/3 · 100 · 15,600 | **0/3 · 100 · ∞** | 3/3\* · 100 · 4,000 |
+| 1.0 | 3/3 · 100 · 13,000 | 3/3 · 100 · 4,500 | 3/3 · 100 · 16,300 | **0/3 · 100 · ∞** | 3/3\* · 100 · 3,800 |
+| 10 | 3/3 · 100 · 12,900 | 3/3 · 100 · 7,600 | 3/3 · 100 · 13,400 | 3/3 · 100 · 65,900 | 3/3\* · 100 · 4,400 |
+| 1000 | 3/3 · 100 · 12,900 | 3/3 · 100 · 8,700 | 3/3 · 100 · 9,900 | 3/3 · 100 · 44,000 | 3/3\* · 100 · 4,100 |
+
+\* E on `t_first_cross`; its `grokked` flags (1/3, 1/3, 1/3, 0/3) are §14.4's
+sustain artifact — every seed crosses with train at 100%.
+
+**Four responses to one manipulation.**
+
+- **A is immune.** 18/18; `t_memo` 3,600–3,900 throughout; `t_first_cross` moves
+  1.09× across a 100,000× span. **This contradicts §18.1** (2.01× on the same
+  setup) and confirms §18.2: that ladder was K=20/50 at α=0.25, where the low
+  rungs starved clients. Remove the starvation and heterogeneity per se costs
+  the anchor nothing.
+- **B and C fail by not memorising.** Below dir_α≈0.5 peak train collapses — B
+  as a step (31% → 100% between 0.1 and 0.5, with no `t_memo` trend above it), C
+  graded (59 → 97 → 100) with `t_memo` rising 2.5× monotonically as shards
+  concentrate. These are optimisation failures and must not be plotted as delay.
+  Across C's full ladder `t_first_cross` is flat within its seed spread, so
+  **§17.2's "Dirichlet beats iid 1.58× on C" is withdrawn** as one concentration's
+  noise (and C's numbers are withheld anyway, §23).
+- **D fails the other way, and at a stricter threshold.** 0/3 below dir_α=10.
+  At 0.01 it never trains (peak 3–5%); at 0.1 it half-memorises; at 0.5 and 1.0
+  it memorises fully (`t_memo` 19,700 and 9,800) and freezes at 70–82% test —
+  the equilibrium of §22, reached from a second axis.
+- **E is unaffected** on `t_first_cross` (3,700–4,900 at every rung).
+
+Two C cells at dir_α=0.1 report `t_memo=∞` with finite `t_first_cross`: test
+crossed 95% while train peaked at 97–99%. Grokking without full memorisation is
+real, and it leaves `delay` undefined at the most interesting rung (§10).
+
+> **Consequences.** §18.1's "threshold" reading generalises in *form* — B, C and D
+> each have one — but the threshold's position (0.5, 0.1–0.5, 10), its shape
+> (step, graded, two-stage) and the phase it attacks are per-setup, and two
+> setups have none. The claim cannot be stated once for the study. The two
+> quadratic MLPs sit at opposite extremes, so architecture alone does not order
+> it; D differs from A in task *and* optimiser, which is the A-vs-D confound.
+
+## 19. The E axis on five setups — local work taxes a different phase on each architecture
+
+`t5_local_epochs`, 63 specs, 48 run (15 banked controls), 65 slot-h, 2026-09-02.
+K=10, iid, E ∈ {5, 10, 25, 50} on every setup, plus E=1 on A. **Compute-matched**:
+rounds scale as 5/E so every rung does the same gradient work, and `eval_every`
+and `checkpoint_every` scale with it so every rung is sampled on the same step
+grid (a fixed cadence would read E=50 at ten times E=5's resolution — §13.4,
+§14.4). B's and D's rungs were given 200,000 and 250,000 steps after an audit of
+the controls' banked `t_first_cross`. Medians over 3 runs:
+
+| setup | E=1 memo / fc | E=5 | E=10 | E=25 | E=50 |
+|---|---|---|---|---|---|
+| A | 3,700 / 12,600 | 3,700 / 12,900 | 3,700 / 13,300 | 3,700 / 14,800 | 4,000 / 23,000 |
+| B | — | 1,300 / 55,900 | 2,500 / 64,500 | 6,100 / 66,800 | **12,700** / 59,800 |
+| C | — | 3,200 / 7,800 | 6,400 / 9,100 | 23,900 / 23,600 | 32,500 / 31,400 (1/3) |
+| D | — | 3,200 / 78,900 | 3,100 / 85,400 | 2,700 / 100,100 | 2,600 / **∞ (0/3)** |
+| E | — | 600 / 5,200 | 800 / 5,100 | 1,200 / 4,600 | 1,900 / 4,900 |
+
+**Two effects, and they split on different variables.**
+
+1. **Memorisation cost tracks local work on transformers and not on full-batch
+   MLPs.** B's `t_memo` ratio to E=5 is 1.0 : 1.9 : 4.7 : 9.8 against E ratios
+   1 : 2 : 5 : 10, per-seed spread ±3%; C's is 1 : 2 : 7.5 : 10. A's and D's are
+   flat (D slightly *falls*). E (MNIST, minibatched) is sub-linear, 3.2×. **This
+   is not the decay clock**: D carries wd=1.0 against B's 0.1 and does not move.
+   §14.3's mechanism stands for the K axis and does not explain the E axis.
+2. **The delay is setup-dependent.** On A it grows monotonically and tightly,
+   8,900 → 9,200 → 9,600 → 11,100 → 19,000 (2.1× over E = 1 → 50), on the one
+   setup with no decay term to confound it. On B it does not move — every rung's
+   `t_first_cross` sits inside B's known 46k–77k bimodal band. On C it collapses
+   to zero from E=25 (`t_fc` ≈ `t_memo`). On D it grows, 75,700 → 81,600 → 97,500,
+   then at E=50 the run enters §22's equilibrium.
+
+**The E=1 identity rung is the equivalence check.** Under plain GD at momentum 0
+FedAvg at E=1 is an algebraic identity with centralized training, and A's rung
+reproduces the banked centralized run to the step — `t_memo` 3,700, `t_first_cross`
+12,600 on seed 42 — on a different Flower version (1.30 against the corpus's
+1.27), machine and CUDA build. New runs are comparable to the banked corpus.
+
+> **Consequences.** §17.4's E column (drift/round 0.018 → 0.167 → 1.92) can carry
+> "local work delays grokking" on the anchor only: on B, drift/round rises with E
+> and the delay does not follow it. What the transformers pay for is memorisation,
+> proportional to local work between aggregations — which is the same quantity
+> §21 lowers by subsampling clients, with `t_memo` in rounds staying flat. C at
+> E=50 is a training failure (peak train 86.6 / 86.9 on the two failing seeds) and
+> its re-run at 1M steps is withheld under §23. E's E=10 rung reads 2/3 on
+> `grokked` and 3/3 on `t_first_cross` (seed 123 dipped back seven times).
 
 ---
 
@@ -1803,6 +2077,14 @@ all six setups, which is what §16 reads.
   throughout; NaN never compares below the bar, so the sustained-crossing scan
   returns the first step. `t_first_cross` reports `inf` for the same runs, which
   is correct. Exclude α=1.0 from any aggregate over that group.
+
+  **Both halves are now fixed in code, so this cannot recur, but the five banked
+  rows are unchanged and still need excluding.** `split_indices` rejects any α
+  that empties either side of the split; `compute_t_grok` treats NaN as below the
+  bar; `x_d_alpha_high` no longer emits the α=1.0 cells. The five result JSONs are
+  left on disk as the record of what ran — deleting them or re-deriving them as
+  censored are both open options, and neither is obviously right: they are not
+  censored measurements, they are absent ones.
 - **exp4b partial-participation T_grok values in `runs.csv` sit on the old inflated
   step axis** (~2.5× too high on `total_steps`); the Phase 0.6 fix changed that axis
   under `fraction_train < 1.0`. They will be corrected when exp4b is re-run.
@@ -1814,6 +2096,21 @@ all six setups, which is what §16 reads.
   6,491 on a Ray actor failure. Tracked in `results/data/runs_skipped.csv`.
 - **α=0.40 centralized reads 12,100** against 9,900 at α=0.35 and 7,600 at α=0.50 —
   n=3, almost certainly noise, but it is the one non-monotonicity in §2.
+- **The harness is not run-to-run deterministic** (§23). Two runs of the same
+  config and seed agree exactly on D and differ by up to 12.7 points of peak train
+  accuracy on C — as much as changing the seed. Flower's `aggregate()` sums client
+  weights in arrival order, nothing sorts them, and no deterministic-algorithm flag
+  is set. Every banked run carries this; the sweep of 2–4 Sep is the first with
+  duplicate cells to show it. Consequences: C's numbers are withheld; the
+  statistics language should say *runs*, not *seeds*; the fix is in RUNS_TODO.
+- **Setup E's participation degradation (§21) is measured at K=20**, which is
+  MNIST's degenerate rung — one full-batch step per local epoch. The degeneracy
+  is constant across f, so the within-setup effect stands, but it has not been
+  shown to survive a non-degenerate K.
+- **Two C cells at dir_α=0.1 report `t_memo=inf` with a finite `t_first_cross`**
+  (§20): test crossed 95% while train peaked at 97–99% and never held the
+  memorisation bar. Real (grokking without full memorisation), but `delay` is
+  undefined there and the C delay curve has a hole at its most interesting rung.
 - **Out of scope, stated deliberately:** DP-FedAvg, communication compression,
   Byzantine-robust aggregation, personalization, async/stragglers, FedBN,
   MOON/FedDecorr, and the LEAF/FLamby/FedScale benchmarks.

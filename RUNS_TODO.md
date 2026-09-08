@@ -221,6 +221,304 @@ drifting 2–4.8 units per 25k steps, so none of them had stalled.
 
 ---
 
+---
+
+## The paper's three open FL axes
+
+Added 2026-09-01 from the paper's `\section{Notes}`. The contributions the paper
+claims are (1) grokking under FL, (2) FL-specific dynamics via FL-specific
+hyperparameters, (3) drift-mitigation techniques against grokking, (4) mech
+interp of why fragmentation delays it. Contribution 2 is the one the banked data
+under-supports: **K** is measured on every setup and partition **structure** is
+measured on every setup, but **local epochs, participation fraction and the
+amount of heterogeneity are measured on the anchor alone** — 562 of 673 banked
+federated runs sit at E=5, 664 at f=1.0, and every Dirichlet ladder rung outside
+`t3b_partitions`' single 0.5 cell is setup A.
+
+Three manifests, written and generated, none launched. **150 runs, ~267
+slot-hours, ~67 h wall** at `--gpus 0 --per-gpu 4` (every cell is K ≤ 20, inside
+the range where four concurrent runs cost nothing per-run).
+
+Each extends the manifest whose figure it joins and inherits that manifest's
+working points and decay — `t5_*` extend `t1_setup_k_ladder` (B at wd=0.1),
+`t3a_dirichlet_setups` extends `t3b_partitions` (B and C at wd=1.0). That is not
+a violation of the 2026-08-20 wd=0.1 standing decision: each new cell is read
+against a banked control at its own decay, and switching a ladder off its own
+control's decay buys a comparison that differs in two things. Every builder
+docstring says this in place.
+
+**Budget audit, 2026-09-01 — three controls failed and were rebased.** Every
+control cell was checked against its banked `t_first_cross` before finalising,
+per the headroom rule, and the first drafts repeated the project's signature
+mistake three times:
+
+| block | first draft | banked t_fc | fix |
+|---|---|---|---|
+| B participation (K=20, wd=0.1) | 100,000 steps | 66,100–98,200 *at 200k* | base → 40,000 rounds; control now hash-matches `p1_k_collapse_budget`'s banked cell |
+| D participation (K=20) | K-ladder cell as control | control is **1/3 grokked** (inf · inf · 95,600) | rebased on `t3b_partitions`' iid K=20 cell — 250,000 steps, banked |
+| D E-ladder (K=10) | K-ladder cell as control | control is **2/3** (seed 42 censored) | rebased on t3b's iid K=10 cell — 250,000 steps, 3/3 at 78,900, banked |
+| B E-ladder (K=10) | 100,000 steps/rung | control 55,200–77,200 (1.3×) | control stays banked; **new rungs at 200,000 steps**, read on `t_first_cross` per §14.4 |
+| E participation (K=20) | 20,000 steps (1.7×) | 11,100–11,900 | rebased on t3b's 8,000-round cell (3.6×), banked |
+
+All rebased controls were verified to hash-match banked runs before
+regeneration, so the fixes cost only the f/E arms' extra length (~42 slot-h) —
+and every manifest's control column now dedups 3/3 on every setup. A and C
+passed the audit unchanged (3.7× and >20×).
+
+### 4. `t5_local_epochs` — the E axis on all five setups, at matched compute. **DONE**
+
+> **48/48 run, 0 failures, 65 slot-h, 2026-09-02.** Readings in RESULTS §19; the
+> D E=50 and C E=50 cells were re-run at 8×/5× budget (`x_e50_long`, entry 8).
+
+`manifests/t5_local_epochs.jsonl` — 63 specs, **48 to run**, ~32 slot-h.
+K=10, iid, E ∈ {5, 10, 25, 50}, 3 seeds, each setup at its K-ladder working
+point. E=5 is the banked K-ladder cell and dedups (15 of the 63).
+
+**Rounds scale as 5/E, so total gradient work is FIXED across the ladder** — the
+opposite convention to the E-spine at the top of `build_manifests.py`, and
+deliberately so: the anchor already has the fixed-rounds reading banked (§17.4's
+E table), so the communication-matched view exists and the compute-matched one
+does not. `eval_every` and `checkpoint_every` scale by the same factor, so every
+rung is sampled on the same *step* grid; a fixed `eval_every` would read the E=50
+cells at 10× the granularity of E=5 and confound the axis with its own
+measurement resolution (§13.4, §14.4).
+
+**A carries one extra rung, E=1, and only A can.** Under GD at momentum=0 FedAvg
+at E=1 is an exact identity with centralized training, so it is the axis's
+zero-drift endpoint with a known answer. On the AdamW setups §15.3 already
+established the same cell is a cold-start-Adam artifact and measures nothing
+federated. It is the most expensive rung here (5× the control's rounds, ~7 h of
+setup A's ~7.2).
+
+> **Decision rule.** Read `delay = t_first_cross − t_memo` against E on the
+> `total_steps` axis, with `mean_client_drift` and `client_weight_divergence`
+> beside it. Delay grows with E at matched compute → local work costs
+> generalisation time and §18.4's "systematic disagreement" gains its cleanest
+> manipulation. Delay flat → the anchor's E table was measuring the extra compute
+> that fixed rounds handed the high-E cells, and §17.4's E column has to be
+> withdrawn as evidence. `t_memo` climbing with E is the decay clock, not a drift
+> result, and must be read apart.
+
+The optimiser-restart confound is bounded rather than removed: `s5_fl_probe`'s
+12 banked persist=True runs on B show persisting Adam state does not recover the
+ceiling, so no new persist arm is bought. `persist_local_opt_state` stays **False**
+everywhere — standard FedAvg semantics, and a no-op under pure GD.
+
+### 5. `t5_participation` — partial participation on B, C, D, E. **DONE**
+
+> **30/30 run, 0 failures, 134 slot-h, 2026-09-04.** Readings in RESULTS §21. Read
+> on the ROUNDS axis — `total_steps` accumulates E·f per round, so step-denominated
+> quantities halve with f by construction.
+
+`manifests/t5_participation.jsonl` — 45 specs, **30 to run**, ~120 slot-h.
+K=20, iid, E=5, f ∈ {1.0, 0.5, 0.25} → 20 / 10 / 5 clients per round, 3 seeds,
+**all five setups**. A is in at K=20 despite `t4b_participation` being banked —
+t4b is at K=50, and a panel whose anchor line sits at a different K from every
+other line carries a second variable. A's control is `t2_k_breakdown`'s banked
+K=20 iid cell (built bare — no strategy/fraction_train/checkpoint keys — so it
+hashes to it and dedups); if A's K=20 axis is flat like its K=50 one, §18.3
+gains a second K for free. E's K=20 is the degenerate rung (one full-batch step
+per local epoch); constant across the f arms so it cancels within-setup, but
+E's panel is not comparable to the others on the E semantics.
+
+**K=20 and not the anchor's K=50** — on B, C and D, K=50 is where *memorisation*
+collapses (§14.3, §17.2), and a participation null measured inside a training
+failure says nothing about participation.
+
+**Rounds scale as 1/f**, exactly as `t4b` did: a round at fraction f does f× the
+gradient work, so a fixed round count would starve the low-f cells by precisely
+the factor under test. `eval_every` and `checkpoint_every` scale with it. The
+f=1.0 control is emitted **without a `fraction_train` key** so its hash matches
+the banked K-ladder cell — 9 of the 12 controls dedup; B's K=20 cell is the one
+that does not exist yet and costs 3 runs.
+
+> **Decision rule.** Compare `t_first_cross` in rounds *and* in `total_steps`
+> against the f=1.0 control, per setup, with `client_weight_divergence` beside
+> it. Flat in rounds, as on the anchor → §18.4's "sampling noise averages out"
+> holds across architectures and the paper can state it as a property of grokking
+> under federation. Delay grows as f falls → read `t_memo` first: if that is what
+> moves, this is the decay clock at a smaller effective client population, not a
+> participation result.
+
+**Cost warning: C's block is ~39 of the 80 slot-hours** (40,000 rounds at f=1.0
+becomes 160,000 at f=0.25, on the slowest setup in the study). Specs are emitted
+longest-first, so truncating after C's f=0.25 cells still leaves every other
+setup complete.
+
+### 6. `t3a_dirichlet_setups` — the heterogeneity ladder on B, C, D, E. **DONE**
+
+> **72/72 run, 0 failures, 137 slot-h, 2026-09-03.** Readings in RESULTS §20. The
+> anchor's ladder is flat: §18.1's 2.01× was starvation, as §18.2 said.
+
+`manifests/t3a_dirichlet_setups.jsonl` — 87 specs, **72 to run**, ~114 slot-h.
+K=10, E=5, `dirichlet_alpha` ∈ {0.01, 0.1, 1.0, 10, 1000}, 3 seeds, **all five
+setups** at their `t3b_partitions` working points and budgets. Written against
+`plans/exp3a-dirichlet-ladder-across-setups.md`, with three departures: **A′ is
+dropped** (out of the paper), E's rung list follows the plan's own feasibility
+table, and **A is in** — the plan's "A needs nothing" points at
+`t3a_dirichlet_band`, which is K ∈ {20, 50} at α=0.25 and whose low rungs are
+the starvation-contaminated cells of §18.2. At K=10 A's min shard at
+dir_α=0.01 is 116–184 (verified per seed against these exact specs), so this is
+the one version of A's ladder that is both matched-K to the other panels and
+clean of the confound. The banked ladder stays as the §18.1/§18.2 reading.
+
+**The 0.5 rung is free, and only if written bare.** `FedConfig.dirichlet_alpha`
+defaults to 0.5 and `t3b_partitions`' banked cells omit the field, so naming it
+explicitly re-runs banked work. The builder emits it as a bare spec: 15 of the 87
+dedup, 3 per setup, exactly as the plan predicted.
+
+**Partitions pre-flighted for these exact specs** (built, not assumed). Min shard
+at K=10, dir_α=0.01: B 298, C 386, D 194 — an order of magnitude clear of the ≤2
+that made §18.2's tail a starvation artifact, so no `dirichlet_sizes` control is
+bought for the algebraic setups.
+
+**E is the exception on both counts.** 10 classes against 97–120, so 0.01 empties
+a shard and raises (its ladder starts at 0.1) — and its min shards are 5 / 25 / 56
+at dir_α=0.1 and 62 / 83 at the banked 0.5 rung, against `batch_size`=100. E's low
+rungs therefore sit **below one batch per client** and are in the starvation
+regime, not a heterogeneity reading. Kept so E has a concentrated end at all, but
+its panel must say so, and separating the two would need `dirichlet_sizes`
+rebuilt for MNIST (12 runs, not written).
+
+> **Decision rule.** Per setup, plot `t_first_cross` against `dirichlet_alpha`
+> with the banked iid cell at the same K as the reference. Flat until the
+> concentrated end on every setup → §18.1's threshold reading generalises. A
+> different threshold per setup → read it against class count and shard geometry
+> before calling it an architecture effect. **Any cell that fails to memorise is
+> not a heterogeneity result** — check `peak_train_acc` first; on the AdamW setups
+> the decay clock is the competing explanation and it has been right every time.
+
+**CANCELLED 2026-09-02 — launched on CaMLSys by mistake, stopped after 15 min
+with no results banked.** The intended venue was the CS department's shared L4
+box (`dev-gpu-acs`), which is *not* permitted for experiments — interactive
+development and <2-minute tests only, per Malcolm's email — so it cannot host
+this either. Venue is an open decision: University HPC (CSD3) or vast.ai. What
+follows is the CaMLSys record, kept because the job script and its findings
+transfer to whichever Slurm venue is chosen.
+
+Venue facts checked 2026-09-02: `dev-gpu-acs` (alias `cam-gpu-acs`, key
+`id_cambridge`) is already accessible — host `gxp-l4-0`, 8× L4 24 GB, 32 cores,
+503 GB — but the department page it points at, the local compute guide and
+Malcolm's email all say the same thing: a few minutes at most, no training, one
+GPU (it pins `CUDA_VISIBLE_DEVICES` and CPU affinity per login). CSD3 (alias
+`csd3`) refuses key-only login — it needs password + TOTP interactively — so a
+first login has to be done by hand; SL3 gives 3,000 GPU-h/quarter, 12 h/job, 32
+GPUs, and this campaign is ~67 GPU-h at four runs per GPU.
+
+What the 15 minutes established: the full 595-test suite passes on a Linux A40
+node with torch 2.10.0+cu128 and flwr 1.27.0; and **16 Ray heads started at the
+same instant produced Ray worker-registration failures on 2 of 16 runs within
+60 s** (`Failed to register worker to Raylet ... End of file`). The 3080 box
+never ran more than 4 concurrently. Whatever venue is next, stagger the slot
+starts in `launch_sweep.py` (a few seconds apart) or cap at ~8 concurrent
+before trusting a 16-wide sweep.
+
+Jobs **55062 → 55063 → 55064**, chained with `afterany` because the `cls_master` QoS
+allows one running job and the `ampere` partition caps at 12 h; each job
+re-invokes the same idempotent script and `launch_sweep` resumes from the result
+JSONs. Script: `scripts/slurm/camlsys_paper_axes.sh` — 4× A40, 44 CPUs, 200 GB,
+`--per-gpu 4` (16 concurrent runs), sweeps in the order local_epochs →
+dirichlet → participation. It builds a fresh venv on `/dev/shm` from
+`pyproject.toml`, **runs the full pytest suite on the node as the gate** (the
+non-FL half passes locally; `flwr` is only installed there), and only then
+launches. Ray temp and object store are on `/dev/shm` too — `/nfs-share` is at
+~180 of ~200 GB quota and mauao's `/tmp` was 99% full. **`flwr` is pinned to
+1.27.\*** in the job: `pyproject` only lower-bounds it, the first submission
+(55059, cancelled after 4 min with no results) resolved 1.36, and the banked
+controls are all 1.27 — Flower owns the client-sampling RNG, so an unpinned
+resolve would have been a version confound under the participation arms.
+
+```bash
+ssh taranaki "squeue -u mh2274"                                             # chain state
+ssh taranaki "tail -40 /nfs-share/mh2274/federated_learning_grokking/logs/slurm-55062.out"
+ssh taranaki "ls /nfs-share/mh2274/federated_learning_grokking/results/data/runs | wc -l"   # 1529 + done
+# pull results when a job ends (JSONs + histories + checkpoints):
+rsync -az taranaki:/nfs-share/mh2274/federated_learning_grokking/results/ results/
+```
+
+A run in flight when a job hits 12 h is re-run from scratch by the next job in
+the chain, so **no single run may exceed 12 h**. The longest cells by estimate
+are D's f=0.25 (~10.6 h on the 3080's per-round timing) and B's f=0.25 (~8.9 h);
+check per-round timing in job 55059's logs before the participation sweep is
+reached, and if A40+Slurm is slower than the 3080, hold those six cells back.
+
+Original single-box launch, kept for reference:
+
+```bash
+for m in t5_local_epochs t3a_dirichlet_setups t5_participation; do
+  setsid nohup venv/bin/python -u scripts/launch_sweep.py \
+      manifests/$m.jsonl --gpus 0 --per-gpu 4 \
+      > logs/sweeps/${m}_$(date +%Y%m%d_%H%M%S).log 2>&1 < /dev/null
+done &
+```
+
+### 7. Contribution 3 is BLOCKED on SCAFFOLD, and the blocker is in the code
+
+The paper's third contribution — drift-mitigation techniques against grokking —
+currently rests on `t3_algorithm_comparison` (90 runs, §17.1), which is **setup A
+only**, and on the SCAFFOLD-vs-FedProx contrast that §17.4 makes the mechanism
+argument out of. It cannot be ported as written:
+
+**`_build_strategy` raises on `strategy="scaffold"` whenever `optimizer="adamw"`**
+(`training/federated.py:485`), and deliberately — SCAFFOLD's Option-II control
+variate `c_i⁺ = c_i − c + (x − y_i)/(η·K)` inverts `x − y_i = η·Σg`, which holds
+for SGD and not under Adam's per-coordinate preconditioning. Setup A is the only
+GD setup in the study, so **SCAFFOLD is unavailable on B, C, D and E**, and it is
+the only drift-correction method in §17.1 that works.
+
+Three ways forward, unresolved:
+
+1. **Implement Option I** — accumulate the mean local gradient during the local
+   steps and use it as `c_i⁺` directly, which is unbiased under any optimiser.
+   ~30 lines in `training/scaffold.py` plus the accumulation hook in the client
+   loop, and it makes the whole drift axis portable. The Option-I/Option-II
+   distinction is Karimireddy's own, so this is not an invention.
+2. **Restrict contribution 3 to the anchor** and state it as a limitation, as
+   §17.2 did for the partition claim.
+3. **Port only the AdamW-safe methods** — FedProx's μ ladder, FedAvgM, FedAdam,
+   FedYogi. Cheap in code, but the server-side adaptive methods need a per-setup
+   `server_lr` calibration first (`t3_server_lr_calibration` was 42 runs on A
+   alone), and §17.4's mechanism argument needs SCAFFOLD specifically: FedProx is
+   the method that *fails*.
+
+Also still unwritten, and flagged twice in RESULTS (§17.4, §18.4) as the one
+control that would settle the mechanism: **FedAvg damped to FedProx's effective
+step size**, ~15 runs on the anchor, separating "corrected direction" from
+"suppressed magnitude".
+
+
+### 8. `x_e50_long` — C and D at E=50, 5× and 8× budget. **DONE**
+
+`manifests/x_e50_long.jsonl` — **6/6, 0 failures, 65 slot-h**, 2026-09-04.
+
+**D: a real breakdown, decision rule (b).** 0/3 at 2,000,000 steps as at 250,000;
+train 100% from step ~3,000, test 80.5 / 82.3 / 82.6%; weight norm 101.5 → 101.6,
+drift/round 8.0 → 8.0, train loss 0.065 → 0.061 (min 0.055 — never the fp32
+underflow of entry 3). A stationary equilibrium, not a slow run. RESULTS §22.
+
+**C: verdict withheld.** 2/3 memorise and grok at 1M steps, but the same
+config+seed at 200k had reached only 67% train at the step where the 1M run
+reports `t_memo`. Trajectories are not reproducible on C — RESULTS §23 — so
+"under-budgeted" and "unstable" cannot be separated with n=3. Not to be quoted.
+
+## Reproducibility — the harness is not run-to-run deterministic
+
+Found by the six duplicate cells above. Same config and seed, two runs: D differs by
+0.00 on every seed; C by 12.7 / 0.0 / 7.7 points of peak train accuracy, against a
+between-seed spread of 13.4. The client loop is seeded (and full-batch on C, so it
+draws nothing), init is seeded, the probes draw nothing. What remains is
+floating-point ordering: Flower's `aggregate()` sums client weights in ARRIVAL order
+and nothing sorts them; no deterministic-algorithm flag is set. Ten float32 layers
+summed in 200 orders give 200 results ~1.5 ulp apart, injected every round.
+
+**To do, in this order.** (1) `results.sort(key=lambda r: r[0].cid)` before
+aggregation — free. (2) `torch.use_deterministic_algorithms(True)` +
+`CUBLAS_WORKSPACE_CONFIG=:4096:8`. (3) A regression test that two runs of a small
+config produce identical histories; none exists — `test_fedavg_identity` proves the
+algebra, not run-to-run. (4) Either bring C's three key cells to n=10 (~21 runs,
+~70 slot-h) or state C qualitatively. (5) Change "seeds" to "runs" in the paper's
+statistics language.
+
 ## Decided against
 
 **α=0.30 and α=0.40 to 250,000 / 200,000 steps** (10.7 slot-h). Every one of the
