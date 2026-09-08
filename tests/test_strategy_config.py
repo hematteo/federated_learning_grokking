@@ -36,9 +36,29 @@ class TestServerStrategies:
         assert cfg.server_momentum == 0.0
         assert cfg.feddyn_alpha == 0.01
 
-    @pytest.mark.parametrize("strategy", ["fedavgm", "fedyogi", "scaffold", "feddyn"])
+    @pytest.mark.parametrize("strategy", ["fedavgm", "fedyogi", "scaffold"])
     def test_new_strategies_accepted(self, strategy):
         assert FedConfig(strategy=strategy).strategy == strategy
+
+    @pytest.mark.parametrize("strategy", ["feddyn", "fedAvgM", "fed_adam", ""])
+    def test_unimplemented_or_misspelled_strategy_raises(self, strategy):
+        """An unrecognised strategy must not quietly become FedAvg.
+
+        `feddyn` was in FedConfig's Literal and had no branch in
+        _build_strategy, so it fell through to plain FedAvg and banked a result
+        row labelled `strategy: "feddyn"`. Typos did the same. The Literal is a
+        type annotation and is not enforced at runtime, so _build_strategy is
+        the only place this can be caught.
+        """
+        from fedgrok.training.federated import _build_strategy
+        from flwr.common import ndarrays_to_parameters
+        import numpy as np
+
+        init = ndarrays_to_parameters([np.zeros((2, 2), dtype=np.float32)])
+        cfg = FedConfig(num_clients=4)
+        cfg.strategy = strategy          # bypass the annotation, as a manifest can
+        with pytest.raises(ValueError, match="Unknown strategy"):
+            _build_strategy(cfg, init, evaluate_fn=None)
 
     def test_build_strategy_dispatches_native(self):
         from flwr.server.strategy import FedAvg, FedAvgM, FedYogi, FedAdam

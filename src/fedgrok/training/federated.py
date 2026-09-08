@@ -184,11 +184,19 @@ _optimizer_cache = {}
 def _get_warm_optimizer(cfg, model, partition_id):
     """This client's optimizer, persisted across rounds (see persist_local_opt_state).
 
-    Keyed exactly like _client_cache, and lives in the same Ray actor, so the
-    Adam moment estimates survive between this client's rounds instead of being
-    re-initialised every round.
+    Lives in the same Ray actor as _client_cache, so the Adam moment estimates
+    survive between this client's rounds instead of being re-initialised.
+
+    Keyed on _client_key PLUS the optimizer's own hyperparameters. _client_key
+    alone describes the data and the model shape, which is all _client_cache
+    needs, but an optimizer is also made of lr / weight_decay / optimizer /
+    momentum -- none of which are in it. Two runs in one process differing only
+    in lr would otherwise share the first one's optimizer and train at the wrong
+    learning rate. A sweep gives each run its own subprocess, so the path that
+    reaches this is the test suite and the multi-run experiment scripts.
     """
-    key = _client_key(cfg, partition_id)
+    key = (_client_key(cfg, partition_id),
+           cfg.optimizer, cfg.lr, cfg.weight_decay, cfg.momentum)
     if key not in _optimizer_cache:
         _optimizer_cache[key] = make_optimizer(model, cfg)
     return _optimizer_cache[key]
@@ -199,9 +207,20 @@ def _load_ndarrays_into(model, ndarrays):
 
     Equivalent to load_state_dict(ndarrays) but without reallocating tensors or
     moving anything across devices; the order matches _model_to_ndarrays.
+
+    The length check is not defensive padding: zip() stops at the shorter
+    sequence, so a mismatch would leave the model's trailing tensors holding the
+    PREVIOUS round's values and train on from there. Nothing downstream notices.
     """
+    entries = model.state_dict()
+    if len(entries) != len(ndarrays):
+        raise ValueError(
+            f"Parameter count mismatch: model has {len(entries)} state_dict "
+            f"entries, received {len(ndarrays)} arrays. Copying would silently "
+            f"leave the trailing tensors at their previous values."
+        )
     with torch.no_grad():
-        for param, arr in zip(model.state_dict().values(), ndarrays):
+        for param, arr in zip(entries.values(), ndarrays):
             param.copy_(torch.from_numpy(arr).to(param.device))
 
 
@@ -244,6 +263,19 @@ def _fit_config_to_cfg(config: dict) -> FedConfig:
     """Reconstruct FedConfig from the dict sent by the server."""
     kwargs = {k: v for k, v in config.items() if k in _FEDCONFIG_FIELDS}
     return FedConfig(**kwargs)
+
+
+def _shuffle_seed(seed: int, partition_id: int, server_round: int) -> int:
+    """Deterministic seed for one client's minibatch shuffle in one round.
+
+    Explicit arithmetic rather than `hash(...)`: hashing a tuple of ints happens
+    to be stable across processes today (PYTHONHASHSEED randomises str/bytes, not
+    ints), but that is an implementation detail, not something to rest run
+    reproducibility on. The multipliers are distinct primes so the three axes
+    cannot alias -- client 1 at round 0 must not draw client 0's round-1 shuffle.
+    """
+    mixed = seed * 1_000_003 + partition_id * 10_007 + server_round
+    return mixed % (2**31 - 1)
 
 
 def compute_drift(w_before: list, w_after: list) -> float:
@@ -324,11 +356,30 @@ class GrokClient(NumPyClient):
         bs = cfg.batch_size
         n_local = x_local.shape[0]
         n_steps = 0
+        # The minibatch order needs its own seeded stream. `fed_train` calls
+        # torch.manual_seed(cfg.seed), but that runs in the DRIVER process; every
+        # client is a separate Ray actor whose default generator is seeded
+        # non-deterministically at first use, so the shuffles below were the one
+        # uncontrolled RNG source in the project. They affected all 94 banked
+        # setup-E (MNIST) federated runs, and asymmetrically -- centralized MNIST
+        # *is* seeded, so the arm those are compared against carried a noise
+        # source it did not.
+        #
+        # A private CPU generator rather than torch.manual_seed, for two reasons.
+        # It leaves the actor's global stream untouched, so the full-batch path
+        # stays bit-identical to every banked run -- which is why this sits
+        # inside the branch and not above it. And a CPU generator draws the same
+        # permutation whichever device the client trains on, so FEDGROK_CLIENT_CPU
+        # no longer changes what is computed.
+        if bs and bs > 0:
+            perm_gen = torch.Generator().manual_seed(_shuffle_seed(
+                int(cfg.seed), int(self.partition_id),
+                int(config.get("server_round", 0))))
         for _ in range(cfg.local_epochs):
             if bs and bs > 0:
                 # A local epoch is a shuffled minibatch pass. randperm is only
                 # reached here, so the full-batch path stays RNG-identical.
-                perm = torch.randperm(n_local, device=device)
+                perm = torch.randperm(n_local, generator=perm_gen).to(device)
                 for i in range(0, n_local, bs):
                     idx = perm[i:i + bs]
                     _step(x_local[idx], y_local_target[idx])
@@ -470,9 +521,22 @@ def _build_strategy(cfg, init_params, evaluate_fn, fit_metrics_aggregation_fn=No
             server_momentum=cfg.server_momentum,
         )
     # "fedavg" and "fedprox" both use the plain FedAvg strategy; FedProx's
-    # proximal term is applied client-side in GrokClient.fit(). SCAFFOLD and
-    # FedDyn are custom (per-client state) and handled in their own commit.
-    return FedAvg(**common_kwargs)
+    # proximal term is applied client-side in GrokClient.fit().
+    if cfg.strategy in ("fedavg", "fedprox"):
+        return FedAvg(**common_kwargs)
+
+    # Anything else is a mistake, and it must not be a silent one. This used to
+    # fall through to FedAvg, so `strategy="feddyn"` -- which FedConfig's Literal
+    # advertised and no branch implements -- ran plain FedAvg and banked a result
+    # row labelled `strategy: "feddyn"`. A typo ("fedAvgM", "fed_adam") did the
+    # same. The Literal is a type annotation and is not enforced at runtime, so
+    # this is the only place the check can happen.
+    raise ValueError(
+        f"Unknown strategy {cfg.strategy!r}. Implemented: fedavg, fedprox, "
+        f"fedadam, fedavgm, fedyogi, scaffold. FedDyn is NOT implemented -- it "
+        f"needs per-client state like SCAFFOLD; use fedprox for a "
+        f"proximal-regularisation arm."
+    )
 
 
 # ── Flower Server + Evaluation ───────────────────────────────────────────────

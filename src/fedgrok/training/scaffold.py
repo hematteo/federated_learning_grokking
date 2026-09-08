@@ -77,11 +77,34 @@ def set_client_cv(key, cv):
 def apply_correction(model, server_cv, client_cv):
     """Add (c - c_i) to each parameter's gradient in place (SCAFFOLD correction).
 
-    Call after loss.backward(), before optimizer.step(). server_cv/client_cv are
-    lists of ndarrays in model.parameters() order.
+    Call after loss.backward(), before optimizer.step().
+
+    ORDERING. The control variates are built from the weight vectors Flower
+    exchanges, which come from `_model_to_ndarrays` and are therefore in
+    `state_dict()` order; this walks `parameters()` order. The two agree only for
+    a module with no buffers -- `state_dict()` yields parameters then buffers per
+    module, `parameters()` yields parameters alone. Every model here (GrokNet,
+    GrokFormer, MLP) is buffer-free, so they agree today. The moment one gains a
+    mask, a running statistic or a positional cache they would silently
+    misalign: the correction would land on the wrong tensors, SCAFFOLD would
+    still run, and the "is drift the mechanism?" arm this exists to answer would
+    return plausible numbers computed from garbage. Hence the check.
     """
-    for param, c, ci in zip(model.parameters(), server_cv, client_cv):
+    params = list(model.parameters())
+    if len(params) != len(server_cv) or len(params) != len(client_cv):
+        raise ValueError(
+            f"SCAFFOLD control-variate misalignment: {len(params)} parameters "
+            f"against {len(server_cv)} server / {len(client_cv)} client "
+            f"variates. The variates follow state_dict() order and this follows "
+            f"parameters() order; they diverge once the model has buffers."
+        )
+    for param, c, ci in zip(params, server_cv, client_cv):
         if param.grad is not None:
+            if tuple(param.shape) != tuple(c.shape):
+                raise ValueError(
+                    f"SCAFFOLD control-variate shape mismatch: parameter "
+                    f"{tuple(param.shape)} against variate {tuple(c.shape)}."
+                )
             param.grad.add_(torch.from_numpy(c - ci).to(param.grad.device))
 
 

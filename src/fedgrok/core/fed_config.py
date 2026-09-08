@@ -20,8 +20,12 @@ class FedConfig(Config):
                                           # (α→∞: IID, α→0: one class per client)
     proximal_mu: float = 0.0              # FedProx proximal term strength
                                           # (0.0 = FedAvg, >0 = FedProx)
+    # "feddyn" is deliberately absent: it needs per-client state like SCAFFOLD
+    # and no branch in _build_strategy implements it, so a spec naming it used to
+    # fall through to plain FedAvg and bank the result as FedDyn. `feddyn_alpha`
+    # below stays a field regardless -- it is in the schema of every banked row.
     strategy: Literal[
-        "fedavg", "fedprox", "fedadam", "fedavgm", "fedyogi", "scaffold", "feddyn"
+        "fedavg", "fedprox", "fedadam", "fedavgm", "fedyogi", "scaffold"
     ] = "fedavg"
     server_lr: float = 1.0               # server-side learning rate (FedAdam/Yogi/AvgM)
     server_momentum: float = 0.0         # server momentum (FedAvgM); DiLoCo's outer Nesterov
@@ -50,5 +54,5 @@ class FedConfig(Config):
     hidden_width: int = 128               # slightly overparameterized for FL
     output_dir: str = "results/baselines/federated"
 
-    # NOTE: `epochs`, `log_every`, and `_epochs_set` are inherited from Config
-    # but unused in the federated setting (replaced by num_rounds/local_epochs).
+    # NOTE: `epochs` and `log_every` are inherited from Config but unused in the
+    # federated setting (replaced by num_rounds/local_epochs).

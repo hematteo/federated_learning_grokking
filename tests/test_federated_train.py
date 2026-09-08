@@ -18,6 +18,7 @@ from fedgrok.training.federated import (
     _fit_config_to_cfg,
     _get_cached_datasets,
     _dataset_cache,
+    _client_cache,
     GrokClient,
     fed_train,
 )
@@ -166,6 +167,77 @@ class TestDatasetCache:
 
 
 # ── GrokClient ────────────────────────────────────────────────────────────────
+
+class TestMinibatchShuffleSeeding:
+    """Client minibatch order must be reproducible.
+
+    torch.manual_seed(cfg.seed) in fed_train runs in the DRIVER process; every
+    client is a separate Ray actor whose default generator is seeded
+    non-deterministically. The shuffles in GrokClient.fit were therefore the one
+    uncontrolled RNG source in the project, affecting all 94 banked setup-E
+    (MNIST) federated runs -- asymmetrically, since centralized MNIST *is* seeded.
+    """
+
+    def test_same_run_client_and_round_gives_the_same_shuffle(self):
+        from fedgrok.training.federated import _shuffle_seed
+        assert _shuffle_seed(42, 3, 7) == _shuffle_seed(42, 3, 7)
+
+    @pytest.mark.parametrize("a,b", [
+        ((42, 0, 1), (42, 1, 0)),      # client vs round must not alias
+        ((42, 0, 0), (43, 0, 0)),      # run seed separates
+        ((42, 0, 0), (42, 1, 0)),      # client separates
+        ((42, 0, 0), (42, 0, 1)),      # round separates
+    ])
+    def test_axes_do_not_alias(self, a, b):
+        from fedgrok.training.federated import _shuffle_seed
+        assert _shuffle_seed(*a) != _shuffle_seed(*b)
+
+    def test_seed_is_in_range_for_torch_generator(self):
+        from fedgrok.training.federated import _shuffle_seed
+        for args in [(0, 0, 0), (999999, 50, 200000)]:
+            torch.Generator().manual_seed(_shuffle_seed(*args))
+
+    def test_minibatch_client_fit_is_reproducible(self):
+        """Two identical fit() calls must produce identical weights."""
+        _dataset_cache.clear(); _client_cache.clear()
+        cfg = FedConfig(p=SMALL_P, num_clients=3, local_epochs=2, batch_size=4,
+                        hidden_width=16, partition="iid", seed=42, lr=STABLE_LR)
+        fit_config = _cfg_to_fit_config(cfg, server_round=1)
+        params = _model_to_ndarrays(_make_model(cfg))
+
+        first, _, _ = GrokClient(partition_id=0).fit(
+            [p.copy() for p in params], fit_config)
+        _client_cache.clear()          # force a cold client, as a re-run would be
+        second, _, _ = GrokClient(partition_id=0).fit(
+            [p.copy() for p in params], fit_config)
+        for a, b in zip(first, second):
+            assert np.array_equal(a, b)
+
+    def test_full_batch_path_does_not_touch_the_global_rng(self):
+        """Banked full-batch runs must stay bit-identical.
+
+        The shuffle generator is private and created only on the minibatch
+        branch, so a full-batch fit must leave the process RNG exactly where it
+        found it -- otherwise every banked full-batch federated run becomes
+        unreproducible.
+        """
+        _dataset_cache.clear(); _client_cache.clear()
+        cfg = FedConfig(p=SMALL_P, num_clients=3, local_epochs=2, batch_size=0,
+                        hidden_width=16, partition="iid", seed=42, lr=STABLE_LR)
+        fit_config = _cfg_to_fit_config(cfg, server_round=1)
+        params = _model_to_ndarrays(_make_model(cfg))
+
+        client = GrokClient(partition_id=0)
+        # Warm the cache first: building the client's model draws from the global
+        # RNG, which is expected and happens once per client. The steady state --
+        # every round after that -- is what must leave the stream alone.
+        client.fit(params, fit_config)
+
+        torch.manual_seed(1234)
+        before = torch.get_rng_state()
+        client.fit(params, _cfg_to_fit_config(cfg, server_round=2))
+        assert torch.equal(before, torch.get_rng_state())
+
 
 class TestGrokClient:
     def _make_client_config(self, partition_id=0, partition="iid"):
