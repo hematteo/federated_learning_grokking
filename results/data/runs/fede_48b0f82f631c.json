@@ -56,7 +56,7 @@
   "peak_train_acc": 14.982639253139496,
   "final_acc": 0.21990740206092596,
   "final_train_acc": 13.732638955116272,
-  "final_ipr": NaN,
+  "final_ipr": "nan",
   "grokked": false,
   "censored": true,
   "steps_run": 200000.0,

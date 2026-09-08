@@ -45,7 +45,7 @@
   "t_50": "inf",
   "final_acc": 3.166666626930237,
   "final_train_acc": 94.9583351612091,
-  "final_ipr": NaN,
+  "final_ipr": "nan",
   "grokked": false,
   "censored": true,
   "steps_run": 10000.0,

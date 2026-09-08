@@ -50,7 +50,7 @@
   "t_50": 48000,
   "final_acc": 64.03645873069763,
   "final_train_acc": 100.0,
-  "final_ipr": NaN,
+  "final_ipr": "nan",
   "grokked": false,
   "censored": true,
   "steps_run": 150000.0,
