@@ -70,3 +70,9 @@ results/checkpoints/
 *.pt
 results/data/runs/*.log
 results/**/*.log
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/

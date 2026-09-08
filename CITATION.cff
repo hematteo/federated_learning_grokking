@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this code or data, please cite it as below."
+title: "Grokking under federated learning: two clocks, partition structure, and a memorising fixed point"
+type: software
+version: 0.2.0
+date-released: 2026-09-08
+license: MIT
+repository-code: "https://github.com/helpmatteo/federated_learning_grokking"
+url: "https://huggingface.co/datasets/FedGrok/fedgrok-checkpoints"
+authors:
+  - family-names: He
+    given-names: Matteo
+  - family-names: Elcock
+    given-names: James
+keywords:
+  - grokking
+  - federated learning
+  - FedAvg
+  - modular arithmetic
+  - mechanistic interpretability
+abstract: >-
+  Code, run manifests, per-run histories and analysis for a study of whether
+  grokking survives federated averaging, across six model/task setups and the
+  FedAvg family. Federation delays grokking rather than breaking it: memorisation
+  slows with the number of clients while the memorise-to-generalise delay stays
+  flat, partition structure matters more than fragmentation, and at high local
+  work a quadratic MLP on S5 reaches a stable state that memorises and never
+  generalises.

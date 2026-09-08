@@ -29,12 +29,12 @@
 # for the whole campaign) go to /nfs-share.
 
 set -uo pipefail
-export PATH=/nfs-share/mh2274/bin:$PATH
+export PATH=/nfs-share/$USER/bin:$PATH
 export PYTHONUNBUFFERED=1
-PROJ=/nfs-share/mh2274/federated_learning_grokking
+PROJ=/nfs-share/$USER/federated_learning_grokking
 cd "$PROJ"
 
-SCRATCH=/dev/shm/mh2274_fedgrok_${SLURM_JOB_ID:-$$}
+SCRATCH=/dev/shm/${USER}_fedgrok_${SLURM_JOB_ID:-$$}
 mkdir -p "$SCRATCH/tmp" "$SCRATCH/ray" logs/sweeps
 trap 'rm -rf "$SCRATCH"' EXIT
 export TMPDIR="$SCRATCH/tmp"

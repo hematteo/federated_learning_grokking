@@ -1,174 +1,208 @@
 # Grokking under federated learning
 
-Does **grokking** — a model memorising its training set, looking like a failure for
-a long time, then abruptly generalising — survive when training is split across many
-clients that average their weights?
+Does **grokking** — a model memorising its training set, looking stuck for a long
+time, then abruptly generalising — survive when training is split across many
+clients that only ever average their weights?
 
-Reproduces Gromov (2023) on modular arithmetic and extends it across six setups and
-the FedAvg family, using Flower.
+This repository holds the code, every run, and the analysis behind a study of that
+question across six model/task setups and the FedAvg family, built on
+[Flower](https://flower.ai). Short answer: federation does not break grokking, it
+delays it, and the delay has a structure — memorisation slows with the number of
+clients while the memorise-to-generalise gap stays flat — with one real exception
+where federated training drives a model into a stable state that memorises
+perfectly and never generalises.
 
-> **The framing that shapes everything here.** FedAvg at one local epoch with `n_k/n`
-> weighting is an *algebraic identity* with centralized GD, proven in
-> `tests/test_fedavg_identity.py` and observed in the wild. So "federation preserves
-> grokking" is not a result — it is forced. The load-bearing axes are therefore local
-> epochs `E`, client count `K`, and **how the data is partitioned**, not the
-> architecture list.
+![Grokking time against the number of clients, on three setups](paper/figures/fig1_two_clocks.png)
 
-## Status
+*Figure 1. Federation costs `t_memo(K) + delay`. Left: grokking time relative to
+centralised training as the number of clients K grows. Middle and right: the two
+clocks separately — time to memorise rises with K, the delay before generalisation
+does not.*
 
-Active work is on branch **`v2-multisetup`**. `main` is the frozen single-setup study
-(tag `v1-single-setup`) and is 60+ commits behind; everything below describes v2.
+## Key findings
 
-- **`RUNS_TODO.md`** — what still needs running, and what was decided against. Start here.
-- **`PROGRESS.md`** — what is built, how to run it, and the reasoning worth not re-deriving.
-- **`RESULTS.md`** — every measured number, with the run data behind it.
-- Ground truth is `results/data/runs_v2.csv`, not the prose. The docs lag the data.
+- **Federation delays grokking and does not break it.** At one local epoch FedAvg is
+  an algebraic identity with centralised gradient descent (`tests/test_fedavg_identity.py`),
+  so the interesting axes are client count K, local epochs E, participation f, and
+  how the data is partitioned. Ten times the clients costs about 16% more training
+  time on the anchor task.
+- **The cost decomposes into two clocks.** Memorisation time grows with K; the
+  delay between memorising and generalising is roughly flat. Budgets set as a
+  multiple of the centralised grokking time under-provision exactly the high-K
+  cells, which manufactured eight of the nine "breakdowns" this project reported
+  before re-measuring them. `t_memo` is recorded next to `t_grok` for that reason.
+- **One breakdown is real.** Setup D at E = 50 local epochs reaches 100% train
+  accuracy by step 3,000 and sits at 80–83% test for two million steps with weight
+  norm, drift and train loss all stationary: a fixed point with the gradient alive,
+  not a clock running out.
+- **How you partition matters more than how far you fragment.** Coherent shards
+  (each client holding one operand) grok where random shards do not on the anchor
+  and on setup C, and incoherent structure (sharding by target) is the worst
+  partition everywhere. The mechanism is visible early: per-neuron spectral
+  concentration separates the coherent and random arms thousands of rounds before
+  either crosses the bar.
+- **Unstructured heterogeneity mostly does not matter.** A Dirichlet label skew over
+  five orders of magnitude leaves the anchor untouched; the apparent failure at the
+  most skewed setting tracks the smallest shard, seed for seed, and is starvation,
+  not heterogeneity. Where heterogeneity does bite, it attacks a different phase
+  per architecture: transformers stop memorising, the quadratic MLP memorises and
+  stops generalising.
+- **Partial participation is free per communication round** on every setup except
+  MNIST, and it is the clean test that sampling noise does not delay grokking while
+  systematic client disagreement does.
+- **Local work scales differently by architecture.** On transformers the cost of
+  memorisation grows linearly with E at matched compute; on full-batch quadratic
+  MLPs it is flat.
+- **Adaptive server optimisers are 10–20× faster than FedAvg on the hard cells**
+  with every method at its own tuned learning rate; SCAFFOLD cuts client
+  divergence and speeds grokking, FedProx cuts divergence and never groks, so drift
+  magnitude is neither necessary nor sufficient.
+- **The optimiser is a control variable.** The identical network on the identical
+  data groks 45× sooner under AdamW than under Gromov's full-batch GD, and the
+  training-fraction cliff moves with it.
 
-## Install
+The numbered ledger with every measurement, the run ids behind it, and the
+claims that were withdrawn is [`RESULTS.md`](RESULTS.md). One caveat carried
+throughout: the Flower/Ray harness is not run-to-run deterministic (float
+summation order in aggregation), which is harmless on most setups and decisive on
+setup C near its threshold, so quantitative claims on C are withheld
+(`RESULTS.md` §23).
 
-```bash
-python3.10 -m venv venv                 # pyproject requires >=3.10
-venv/bin/pip install -e ".[dev]"
-```
+## The setups
 
-Versions are pinned in `pyproject.toml`; `torch` and `torchvision` are a pinned *pair*,
-and `flwr>=1.27` is required for the `run_simulation` API. Runs assume CUDA — the
-launcher pins one GPU per subprocess via `CUDA_VISIBLE_DEVICES`.
+| Setup | Task | Model | Optimiser, weight decay | Grok bar |
+|---|---|---|---|---|
+| **A** (anchor) | (n + m) mod 97, one-hot, MSE | two-layer quadratic MLP (Gromov 2023) | full-batch GD, lr 50, wd 0 | 95% |
+| **A′** | same | same | AdamW | 95% |
+| **B** | (n + m) mod 113, cross-entropy | one-layer transformer (Nanda et al. 2023) | AdamW, wd 1.0 (0.1 for new work) | 95% |
+| **C** | S₅ composition, cross-entropy | transformer | AdamW, wd 1.0 (0.1 for new work) | 85% |
+| **D** | S₅ composition, cross-entropy | quadratic MLP | AdamW, wd 1.0 | 85% |
+| **E** | MNIST-1k, MSE (Omnigrok) | ReLU MLP with scaled init | AdamW, wd 0.1 | 90% |
 
-**Hardware.** This project ran on an 8× L4 box until 2026-08-17 and now runs on a
-single **RTX 3080 Laptop (8 GB), 16 cores**. Multi-GPU pools in `scripts/run_*.sh`
-are records of what was run, not runnable commands. Banked `wall_s` figures come
-from the L4 and still transfer: the work is orchestration-bound, so per-run wall is
-about the same here (measured, §Concurrency in `PROGRESS.md`).
+Every setup is trained centralised and under FedAvg with K ∈ {2, 5, 10, 20, 50}
+clients (97 on the anchor), E ∈ {1, 5, 10, 25, 50} local epochs, participation
+f ∈ {0.2 … 1}, IID / operand / target / coset / label-block / Dirichlet partitions,
+and FedAvg, FedAdam, FedYogi, FedAvgM, FedProx and SCAFFOLD on the anchor. The
+grok bar is a dataset property and is stored per run.
 
-## Running a sweep
-
-Experiments are declared as **manifests** — JSONL files of run specs — rather than as
-CLI invocations. A run's id is a content hash of its config, which is what makes
-resume free and makes duplicate work across manifests impossible.
-
-```bash
-venv/bin/python scripts/build_manifests.py                    # (re)generate manifests/
-venv/bin/python scripts/validate_manifest.py manifests/<name>.jsonl
-venv/bin/python scripts/launch_sweep.py manifests/<name>.jsonl --gpus 0 --per-gpu 4
-venv/bin/python scripts/collect_runs.py                       # -> results/data/runs_v2.csv
-venv/bin/python scripts/summarize_runs.py results/data/runs_v2.csv --group setup,num_clients
-```
-
-Resume is automatic: re-running a manifest executes only what is missing. A long sweep
-should be detached, or it dies with its shell:
-
-```bash
-setsid nohup venv/bin/python -u scripts/launch_sweep.py manifests/<name>.jsonl \
-    --gpus 0 --per-gpu 4 > logs/sweeps/<name>.log 2>&1 < /dev/null &
-```
-
-Sweep logs go in `logs/sweeps/`, not `logs/` — the latter holds v1 experiment logs and
-is harvested non-recursively into `results/data/runs.csv`.
-
-**Every manifest builder in `scripts/build_manifests.py` carries its decision rule in
-its docstring.** Read it before reading that sweep's results, not after.
-
-## Two things that will bite you
-
-**Budget as `t_memo(K) + delay`, never as a multiple of the centralized T_grok.**
-Federation slows *memorisation* steeply with client count while leaving the *delay*
-roughly flat. A centralized-anchored budget under-provisions exactly the high-`K`
-cells you care about. Six boundaries in this project were manufactured by getting
-this wrong — every headline failure it has reported turned out, on re-measurement, to
-be a clock running out. `t_memo` is recorded next to `t_grok` for this reason.
-
-**Wall-clock is ~99% orchestration, not compute.** 50,000 centralized gradient steps
-take under a minute; the identical arithmetic federated across 5 clients takes ~22.
-Cost scales with *client count*, not training length, so order manifests
-longest-job-first and do not size the work in GPU-hours.
-
-**VRAM is CUDA contexts, not tensors.** Every client is a separate Ray actor
-*process*, and each pays a full CUDA context — ~226 MiB measured, before any model
-or data exists. Setup B's transformer is 0.9 MB and a K=50 client's shard is
-0.09 MB, so a K=50 run wants ~180 MB of actual memory and ~11 GB of context. VRAM
-therefore scales with **how many clients run at once**, and the model size barely
-enters. Two env vars control it, neither of which changes what is computed:
-
-```bash
-FEDGROK_GPU_CLIENT_CAP=8   # at most 8 clients hold a context at once
-FEDGROK_CLIENT_CPU=1       # clients train on CPU; server still evaluates on GPU
-```
-
-FedAvg is synchronous, so running K clients in waves of N is the same computation —
-verified bit-identical on accuracy, with losses agreeing to 4e-9. They are env vars
-rather than config fields because run ids are content hashes of the spec: an added
-field would re-id every banked run.
-
-On the 8 GB card, `--per-gpu 4` is the measured working default up to K=20 — four
-concurrent runs cost nothing per-run against the banked single-slot L4 rate. Past
-K=20, cap the clients rather than the runs: 50 client processes on 16 cores contend
-rather than compute, and capping to 8 is 2.9× faster *and* halves peak VRAM.
-
-## Layout
+## What is in the repository
 
 ```
 src/fedgrok/
   core/        Config + FedConfig dataclasses, model/loss registry, guards
-  data/        dataset registry — modular arithmetic, S_n composition, MNIST-1k;
-               partitioning (iid, operand, target, dirichlet, label_block, coset)
-  models/      GrokNet (quadratic MLP), Nanda transformer, generic ReLU MLP
-  training/    centralized loop, Flower/Ray federated loop, SCAFFOLD, runner
-  metrics/     Fourier/IPR, S_n isotypic decomposition, exact quadratic-circuit
-               split, per-setup mechanistic probes
-  analysis/    T_grok / t_memo detection, censored-survival statistics
+  data/        modular arithmetic, S_n composition, MNIST-1k; partitioners
+  models/      GrokNet (quadratic MLP), Nanda transformer, ReLU MLP
+  training/    centralised loop, Flower/Ray federated loop, SCAFFOLD, runner
+  metrics/     Fourier/IPR, S_n isotypic decomposition, quadratic-circuit split
+  analysis/    t_grok / t_memo detection, censored-survival statistics
   manifest.py  spec -> config, content-hash run ids, grid expansion
   run.py       single-run entry point, atomic result JSON
 
-scripts/       build_manifests, validate_manifest, launch_sweep, collect_runs,
-               summarize_runs, backfill_runs, harvest_logs
-scripts/plotting/   result-row consumers; grok_curves.py builds a self-contained
-                    HTML page of train/test curves with the delay band marked
-manifests/     the declared experiments
-results/data/  runs_v2.csv + runs.csv — the committed evidentiary base
-tests/         the suite, ~9 min including Flower/Ray integration
+manifests/           every experiment, declared as JSONL run specs
+scripts/             build_manifests, validate_manifest, launch_sweep, collect_runs,
+                     summarize_runs, backfill_runs, package_checkpoints, ...
+scripts/plotting/    paper_figures (the figure set), run_atlas, grok_curves, ...
+paper/               figures.tex and paper/figures/ (fig1-7, A1-A2, PNG + PDF)
+results/data/        runs_v2.csv (1,685 runs) and the per-run result rows
+results/runs/        per-round training history and spec for every run
+tests/               the suite; ~9 min with the Flower/Ray integration tests
+RESULTS.md           the ledger: every number, with the runs behind it
+PROGRESS.md          what is built, how it is run, decisions worth not re-deriving
+RUNS_TODO.md         what remains and what was decided against
+plans/               the campaign plans (closed ones under plans/closed/)
 ```
 
-`run_experiment.py` and `experiments/` are the **v1 orchestration surface**, kept
-because v1's 870 runs are still cited. They predate the manifest system and are not
-used by anything in `src/`, `scripts/` or `tests/`.
+`run_experiment.py` and `experiments/` are the v1 single-setup study (870 runs,
+tag `v1-single-setup`). They predate the manifest system and nothing in `src/`,
+`scripts/` or `tests/` uses them.
 
-## Data release
+## Data
 
-Model checkpoints and per-client weights (40 GB, 664 runs) are on Hugging Face at
-[FedGrok/fedgrok-checkpoints](https://huggingface.co/datasets/FedGrok/fedgrok-checkpoints),
-gated with automatic approval. One uncompressed tar per campaign `group`, filed
-under a folder named for the paper axis it supports (`num_clients/`, `local_epochs/`,
-`participation/`, `heterogeneity/`, `mechanism/`); the `group` column of `runs_v2.csv`
-is the join key, and the dataset's `MANIFEST.csv` maps each group to its path and figure. Runs with `checkpoint_every = 0`
-(the strategy comparison, setup A's local-epochs ladder, most centralised
-anchors) have histories here but no weights anywhere. `scripts/package_checkpoints.py`
-builds a campaign's archives; `scripts/merge_checkpoint_release.py` extends the
-published root files without touching existing archives.
+Three layers, from small to large:
 
-## Statistics
+1. **The run table**, `results/data/runs_v2.csv`: one row per run with every config
+   field and outcome (`t_memo`, `t_first_cross`, `t_grok`, `grokked`, `censored`,
+   final accuracies, IPR). The ground truth; the prose lags it.
+2. **Per-round histories**, `results/runs/<run_id>/history_*.json`: train/test
+   loss and accuracy, weight norms, client drift and divergence at every logging
+   step, so any curve in the paper can be re-plotted from a clone.
+3. **Model checkpoints and per-client weights** (40 GB, 664 runs), on Hugging Face
+   at [FedGrok/fedgrok-checkpoints](https://huggingface.co/datasets/FedGrok/fedgrok-checkpoints),
+   gated with automatic approval. One uncompressed tar per campaign group, filed by
+   the paper axis it supports; the `group` column of the run table is the join key,
+   and the dataset's `MANIFEST.csv` maps each group to its path and figure. Runs with
+   `checkpoint_every = 0` (the strategy comparison, setup A's local-epoch ladder,
+   most centralised anchors) have histories but no weights.
 
-Runs that do not grok within budget are **right-censored**, not dropped and not
-recorded as infinity. Headline numbers are Kaplan–Meier medians with bootstrap 95%
-CIs over seeds, alongside the fraction of seeds that grokked — which is the order
-parameter, and the honest headline whenever a cell is partly censored.
+A run id is a content hash of its config, so it is the same in the table, on disk
+and in the checkpoint archives.
 
-The grok threshold is a **dataset property**, not a constant (95% modular, 90% MNIST,
-85% S₅), and is stored per run: a `t_grok` only means something next to the bar it was
-measured at.
-
-## Tests
+## Reproduce
 
 ```bash
-venv/bin/python -m pytest tests/ -q          # full suite, ~9 min
-venv/bin/python -m pytest tests/ -q -k "not Fed and not fed and not integration"   # ~45 s
+python3.10 -m venv venv && venv/bin/pip install -e ".[dev]"   # pins in pyproject.toml
+venv/bin/python -m pytest tests -q -k "not Fed and not fed and not integration"   # ~45 s
 ```
 
-The exact passing count lives in `PROGRESS.md`; the slow half is Flower/Ray simulation.
+Experiments are manifests, not command lines. Re-running a manifest executes only
+the runs whose result row is missing:
+
+```bash
+venv/bin/python scripts/build_manifests.py                      # regenerate manifests/
+venv/bin/python scripts/validate_manifest.py manifests/t5_local_epochs.jsonl
+venv/bin/python scripts/launch_sweep.py manifests/t5_local_epochs.jsonl --gpus 0 --per-gpu 4
+venv/bin/python scripts/collect_runs.py                         # -> results/data/runs_v2.csv
+venv/bin/python scripts/summarize_runs.py results/data/runs_v2.csv --group setup,num_clients
+python3 scripts/plotting/paper_figures.py                       # -> paper/figures/
+```
+
+Every manifest builder in `scripts/build_manifests.py` carries its decision rule
+in its docstring. Runs assume CUDA; the launcher pins one GPU per subprocess. Wall
+clock is orchestration-bound (each client is a Ray actor with its own CUDA
+context), so cost scales with client count, not training length. Two environment
+variables trade wall clock for memory without changing what is computed:
+`FEDGROK_GPU_CLIENT_CAP=8` (clients holding a context at once) and
+`FEDGROK_CLIENT_CPU=1` (clients train on CPU). The measured guidance is in
+`PROGRESS.md` under *Concurrency*.
+
+## Conventions
+
+- **Two clocks.** `t_memo` is the first step at which train accuracy holds the bar;
+  `t_first_cross` the first step test accuracy reaches it; `t_grok` the first step
+  after which it never drops below. `delay = t_first_cross − t_memo`. Compare
+  `t_first_cross` across budgets or logging rates: `t_grok` depends on how long the
+  run continued.
+- **Censoring.** Runs that do not grok within budget are right-censored, never
+  dropped and never recorded as infinity. Headline numbers are Kaplan–Meier medians
+  with bootstrap 95% intervals over seeds, alongside the fraction of seeds that
+  grokked, which is the honest headline whenever a cell is partly censored.
+- **Budgets** are set as `t_memo(K) + delay`, never as a multiple of the
+  centralised grokking time.
+
+## Citation
+
+If this work is useful, please cite it (see [`CITATION.cff`](CITATION.cff)):
+
+```bibtex
+@misc{fedgrok2026,
+  title  = {Grokking under federated learning: two clocks, partition structure, and a memorising fixed point},
+  author = {He, Matteo and Elcock, James},
+  year   = {2026},
+  url    = {https://github.com/helpmatteo/federated_learning_grokking}
+}
+```
+
+## License
+
+Code is released under the MIT License (see [`LICENSE`](LICENSE)). The run table,
+histories and checkpoints are released under the same terms.
 
 ## References
 
 - Gromov, A. (2023). *Grokking modular arithmetic.* arXiv:2301.02679
-- Nanda et al. (2023). *Progress measures for grokking via mechanistic interpretability.*
-- Liu et al. (2023). *Omnigrok: grokking beyond algorithmic data.*
-- Stander et al. (2023). *Grokking group multiplication with cosets.*
+- Nanda, N., Chan, L., Lieberum, T., Smith, J., Steinhardt, J. (2023). *Progress measures for grokking via mechanistic interpretability.* ICLR.
+- Liu, Z., Michaud, E. J., Tegmark, M. (2023). *Omnigrok: grokking beyond algorithmic data.* ICLR.
+- Stander, D., Yu, Q., Fan, H., Biderman, S. (2023). *Grokking group multiplication with cosets.*
+- McMahan, H. B. et al. (2017). *Communication-efficient learning of deep networks from decentralized data.* AISTATS.
+- Karimireddy, S. P. et al. (2020). *SCAFFOLD: stochastic controlled averaging for federated learning.* ICML.
+- Beutel, D. J. et al. (2020). *Flower: a friendly federated learning research framework.*
