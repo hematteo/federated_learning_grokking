@@ -736,17 +736,24 @@ def x_d_alpha_high():
     into one ladder. At these alphas T_grok is well under 5,000, so the budget is
     ample.
 
-    NOTE on alpha = 1.00: alpha is the fraction of the grid used for TRAINING, so
-    1.00 leaves the test set empty. It does not error -- compute_accuracy over
-    zero samples returns NaN -- so the run completes and records t_grok = inf with
-    a NaN test curve. Kept because it was asked for and because the train curve is
-    still meaningful, but its test series is undefined by construction, not a
-    measurement of failure. alpha = 0.975 already leaves only 360 test samples.
+    alpha = 1.00 IS NO LONGER EMITTED, and the note that used to sit here was
+    wrong in the one way that mattered. It said the empty-test-set cells "record
+    t_grok = inf", which sounds harmless. They recorded `t_grok = 0,
+    grokked = True`: compute_accuracy over zero samples returns NaN, `nan <
+    threshold` is False, so the sustained-crossing scan found no point below the
+    bar and reported it as held from the first sample. Five banked rows in this
+    group say setup D groks instantly at alpha = 1.0, and nothing measured them.
+
+    `split_indices` now rejects any alpha that empties either side of the split
+    and `compute_t_grok` treats NaN as below the bar, so neither half can recur.
+    The ladder stops at 0.975, which already leaves only 360 test samples. The
+    five banked JSONs stay on disk as the record; RESULTS.md carries the
+    exclusion note.
     """
     return expand_grid(
         {"mode": "centralized", **SETUP_D, "epochs": 40_000, "log_every": 100},
         {"alpha": [0.575, 0.6, 0.625, 0.65, 0.675, 0.7, 0.725, 0.75, 0.775,
-                   0.8, 0.825, 0.85, 0.875, 0.9, 0.925, 0.95, 0.975, 1.0],
+                   0.8, 0.825, 0.85, 0.875, 0.9, 0.925, 0.95, 0.975],
          "seed": SEEDS5},
         tags={"tier": "X", "group": "d_alpha_high", "experiment": "tangent",
               "setup": "D"},
@@ -2563,7 +2570,536 @@ def x_b_wd_zero_a04_long():
     )
 
 
+# ── The paper's three open FL axes ───────────────────────────────────────────
+#
+# The campaign measured K exhaustively and partition structure exhaustively. The
+# other three FL design variables -- local epochs E, participation fraction f,
+# and the AMOUNT of heterogeneity -- are measured on the ANCHOR ONLY, so every
+# statement the paper makes about them is a statement about one architecture on
+# one task. These three builders close that, each one extending the manifest
+# whose figure it joins:
+#
+#   t5_local_epochs        extends t1_setup_k_ladder  (same base, same decays)
+#   t5_participation       extends t1_setup_k_ladder  (same base, same decays)
+#   t3a_dirichlet_setups   extends t3b_partitions     (same base, same decays)
+#
+# THE DECAY THIS IMPLIES, stated because it looks like a violation of the
+# 2026-08-20 standing decision and is not. B and C carry the decay of the
+# manifest they extend -- B at wd=0.1 in the two K-ladder builders, B and C at
+# wd=1.0 in the Dirichlet ladder -- because each of these axes is read against a
+# BANKED control at that decay. Switching a ladder to a different decay from its
+# own control does not produce a cleaner number; it produces a comparison
+# between two cells that differ in two things. "New work uses wd=0.1" governs a
+# new working point, not the completion of a banked figure whose other lines are
+# already drawn -- and PROGRESS's own rule for mixed figures (label which decay
+# each line carries) is what applies here.
+
+
+def _e_scaled(common, rounds_at_e5, E, ckpt_at_e5=0):
+    """One E-ladder cell, compute-matched to the E=5 cell it is scaled from.
+
+    ROUNDS. total_steps accumulates E per round at full participation, so
+    rounds = rounds_at_e5 * 5/E holds total gradient work FIXED across the
+    ladder. That is the opposite convention to the E-spine at the top of this
+    file, which fixes rounds and lets compute scale with E, and the choice is
+    deliberate: the anchor already has the fixed-rounds reading banked
+    (RESULTS 17.4's E table, 10,000 rounds at E in {1,5,50}), so the
+    communication-matched view exists. What does not exist anywhere is the
+    compute-matched one, and it is the view that separates "local work delays
+    grokking" from "this cell simply ran longer".
+
+    EVAL CADENCE IS MATCHED IN STEPS, NOT ROUNDS -- eval_every scales by the
+    same 5/E. A fixed eval_every would sample the curve every E*eval_every
+    steps, so the E=50 cells would be read at 10x the granularity of E=5 and the
+    E axis would be confounded with the measurement resolution. This project has
+    lost two results to exactly that (13.4 and 14.4: t_grok measuring the
+    logging rate), and it is cheap to avoid here. Same scaling for
+    checkpoint_every, so the mech-interp channel samples the same step grid on
+    every rung.
+    """
+    scale = 5.0 / E
+    spec = {**common, "local_epochs": E,
+            "num_rounds": max(1, round(rounds_at_e5 * scale)),
+            "eval_every": max(1, round(FL_EVAL_EVERY * scale))}
+    if ckpt_at_e5:
+        spec["checkpoint_every"] = max(1, round(ckpt_at_e5 * scale))
+    return spec
+
+
+# Each block is the setup's own K=10 cell from the manifest named beside it --
+# copied field-for-field so that the E=5 rung is a content-hash match and
+# dedups instead of re-running.
+# (label, common, control_rounds_at_e5, rung_rounds_at_e5, ckpt_at_e5).
+#
+# CONTROL AND RUNG BUDGETS DIFFER ON B, and only on B. The banked K-ladder
+# controls were audited against their own t_first_cross before this manifest
+# was finalised, and two failed the headroom rule:
+#
+#   B  K=10  t_fc 55,200-77,200 at a 100,000-step budget -> 1.3x. The control
+#      itself is 3/3 and MEASURED, so it stays banked -- but rungs at the same
+#      budget would censor under any E-induced slowdown comparable to the
+#      anchor's (delay roughly doubles by E=50, RESULTS 17.4). New rungs get
+#      200,000 steps. Reading rung-vs-control across budgets is exactly what
+#      the standing decision "compare t_first_cross, not t_grok, when budgets
+#      differ" (14.4) licenses.
+#   D  K=10  the K-ladder cell is 2/3 -- seed 42 CENSORED at 100,000 steps
+#      (t_fc inf). A censored reference is not a control, so D's whole ladder
+#      rebases on t3b_partitions' iid K=10 cell instead: 250,000 steps, 3/3 at
+#      t_fc ~78,900, banked, and its t3b-style common (explicit strategy /
+#      fraction_train, checkpoint_every 5,000) hash-matches it -- verified
+#      against the run store at authoring time. Zero re-runs, and every D rung
+#      is compute-matched at 250,000 steps.
+#
+# A (3.8x), C (>20x) and E (3.6x) pass the audit and keep a single budget.
+def _k10_blocks():
+    return [
+        # A -- t2_k_breakdown's cell. No checkpoint fields on that manifest, so
+        # none here either; A's per-client weights come from t3b/t4b instead.
+        ("A", {**{k: v for k, v in SETUP_A.items()
+                  if k not in ("num_rounds", "eval_every")},
+               "num_clients": 10, "partition": "iid"},
+         FL_ROUNDS, FL_ROUNDS, 0),
+        # B -- t1_setup_k_ladder's K=10 cell; rungs at double budget, above.
+        ("B", {"mode": "federated", **SETUP_B, "weight_decay": 0.1,
+               "alpha": 0.30, "partition": "iid", "num_clients": 10,
+               "checkpoint_client_weights": True}, 20_000, 40_000, 2_000),
+        ("C", {"mode": "federated", **SETUP_C, "hidden_width": 256,
+               "alpha": 0.50, "partition": "iid", "num_clients": 10,
+               "checkpoint_client_weights": True}, 40_000, 40_000, 4_000),
+        # D -- t3b_partitions' iid K=10 cell, NOT the K-ladder's (see above).
+        ("D", {"mode": "federated", **SETUP_D, "alpha": 0.30,
+               "local_epochs": 5, "strategy": "fedavg", "fraction_train": 1.0,
+               "partition": "iid", "num_clients": 10,
+               "checkpoint_client_weights": True}, 50_000, 50_000, 5_000),
+        ("E", {"mode": "federated", **{k: v for k, v in SETUP_E.items()
+                                       if k != "batch_size"},
+               "n_train": 2000, "n_test": 5000, "batch_size": 100,
+               "partition": "iid", "num_clients": 10,
+               "checkpoint_client_weights": True}, 4_000, 4_000, 400),
+    ]
+
+
+def t5_local_epochs():
+    """PAPER AXIS 1: local epochs, on every setup, at matched compute.
+
+    THE GAP. 562 of the 673 banked federated runs are at E=5, and every cell
+    that is not sits on the anchor (E in {1, 25, 50}) or is B's 6-run
+    persist-state probe. So the paper's local-work axis is one architecture on
+    one task, and RESULTS 17.4's E column -- drift/round 0.018 -> 0.167 -> 1.92
+    across E = 1, 5, 50 -- is the whole of the evidence that local work is what
+    generates client disagreement.
+
+    WHY THIS IS THE AXIS THE DRIFT STORY NEEDS. 18.4 concluded that systematic
+    disagreement delays grokking while sampling noise does not. E is the one
+    knob that raises disagreement by making clients travel FURTHER from a shared
+    starting point without changing the data any client holds -- the opposite
+    manipulation to exp3a (which changes what the data IS) and to exp4b (which
+    changes who is sampled). If the delay tracks E at matched compute, "local
+    work generates the conflict" is measured rather than assumed on all five
+    setups; if it does not, the drift-per-round table is a correlate of E and
+    not a mechanism.
+
+    DESIGN. K=10, iid, E in {5, 10, 25, 50}, 3 seeds, each setup at its own
+    working point. E=5 is the banked K-ladder cell and dedups. Rounds and both
+    sampling cadences scale by 5/E -- see _e_scaled for why compute-matching and
+    not round-matching, and why the eval grid has to move with it.
+
+    A CARRIES ONE EXTRA RUNG, E=1, and only A can. Under plain GD at
+    momentum=0, FedAvg at E=1 is an exact algebraic identity with centralized
+    training (tests/test_fedavg_identity.py), so A's E=1 cell is the axis's
+    zero-drift endpoint with a known answer -- it must reproduce the centralized
+    curve, and if it does not the harness is wrong rather than the finding
+    interesting. On B/C/D/E it would measure nothing of the kind: 15.3
+    established that with persist_local_opt_state=False (the default here, and
+    standard FedAvg semantics) every AdamW round at E=1 is a single cold-start
+    bias-corrected Adam step, which is closer to signSGD than to Adam. That cell
+    is uninterpretable as a federated result, so it is not bought. Its cost on A
+    is 5x the control's rounds and it is the single most expensive rung here.
+
+    THE OPTIMISER-RESTART CONFOUND IS BOUNDED, NOT REMOVED. Rebuilding the local
+    optimiser every round is what FedAvg does, so the E axis on an AdamW setup
+    carries restart frequency alongside local drift -- fewer, longer rounds also
+    means fewer restarts. s5_fl_probe already bounds it on B: 12 banked runs,
+    E=5 and E=50, persist False against True, and persisting Adam state does not
+    recover the ceiling (3/3 against 2/3, overlapping times). So the confound is
+    measured and small on the one setup that has the data, and no new
+    persist=True arm is bought here.
+
+    > DECISION RULE. Read delay = t_first_cross - t_memo against E on the
+    > total_steps axis, per setup, with mean_client_drift and
+    > client_weight_divergence beside it.
+    > (a) Delay grows with E at matched compute, on the AdamW setups as well as
+    >     on A -> local work costs generalisation time, the drift-per-round
+    >     table generalises, and 18.4's "systematic disagreement" gains its
+    >     third and cleanest manipulation.
+    > (b) Delay flat in E at matched compute -> E buys communication savings for
+    >     free at these K, the anchor's E table was measuring the extra compute
+    >     that fixed rounds handed the high-E cells, and RESULTS 17.4's E column
+    >     needs withdrawing as evidence for the mechanism.
+    > (c) The two AdamW failure modes are separable and must be read apart:
+    >     t_memo climbing with E is the decay clock (14.3) reaching the
+    >     memorisation phase, not a drift result.
+    """
+    specs = []
+    for label, common, ctrl_r5, rung_r5, ckpt5 in _k10_blocks():
+        tags = {"tier": "T5", "group": "local_epochs", "experiment": "exp_e",
+                "setup": label}
+        rungs = [1, 5, 10, 25, 50] if label == "A" else [5, 10, 25, 50]
+        for E in rungs:
+            r5 = ctrl_r5 if E == 5 else rung_r5
+            c5 = ckpt5 if E == 5 else (ckpt5 and round(ckpt5 * rung_r5 / ctrl_r5))
+            specs += expand_grid(_e_scaled(common, r5, E, c5),
+                                 {"seed": SEEDS3}, tags=tags)
+    return specs
+
+
+def t5_participation():
+    """PAPER AXIS 2: partial participation, on the four setups that lack it.
+
+    THE GAP. 664 of 673 banked federated runs are at f=1.0. The nine that are
+    not are t4b_participation, on the anchor, at K=50 -- and 18.3's reading of
+    them is one of the load-bearing results in the drift story: sampling 10 of
+    50 clients reaches the bar in the SAME number of rounds while doing a fifth
+    of the gradient work, so on the compute-matched axis partial participation
+    is free. 18.4 then makes that cell carry the whole "sampling noise averages
+    out, systematic conflict does not" distinction. One setup, one K.
+
+    WHY IT MATTERS THAT IT IS ONE SETUP. The claim is mechanistic -- it says
+    what KIND of disagreement costs time -- and the anchor is the setup with no
+    weight decay, no adaptive optimiser and a memorisation time flat in K. Every
+    other setup fails at high K through memorisation rather than through delay
+    (14.3), and subsampling clients is exactly a manipulation of how much
+    gradient signal reaches the aggregate per round. Whether f is free on a
+    setup whose memorisation is already starved is not something the anchor can
+    answer.
+
+    DESIGN. K=20, iid, E=5, f in {1.0, 0.5, 0.25} -> 20, 10 and 5 clients per
+    round, 3 seeds, each setup at its K-ladder working point. K=20 rather than
+    the anchor's K=50: on B, C and D, K=50 is where memorisation itself
+    collapses (14.3, 17.2), and a participation null measured inside a training
+    failure says nothing about participation.
+
+    ROUNDS SCALE AS 1/f, exactly as t4b did, and for the same reason: a round at
+    fraction f does f times the gradient work, so a fixed round count would
+    starve the low-f cells by precisely the factor under test. Every cell here
+    reaches the same total_steps as its own f=1.0 control. eval_every and
+    checkpoint_every scale by 1/f as well, so all three cells are sampled on the
+    same total_steps grid rather than the same round grid.
+
+    THE f=1.0 CONTROL IS EMITTED WITHOUT A fraction_train KEY so its content
+    hash matches the banked K-ladder cell and it dedups. Emitting it as
+    fraction_train=1.0 would be the same experiment with a different id, which
+    is the hazard manifest.orphaned_ids exists for.
+
+    A IS IN, AT K=20, DESPITE t4b -- because t4b is at K=50 and this figure is
+    at K=20, and a panel whose anchor line sits at a different K from every
+    other line is not the anchor as a reference, it is a second variable. A's
+    control is t2_k_breakdown's K=20 iid cell (banked, 5 seeds), which carries
+    no strategy/fraction_train/checkpoint keys, so A's block is built from
+    SETUP_A directly rather than from the shared common dict -- adding those
+    keys would change the control's hash and re-run banked work. The f<1 arms
+    do carry per-client checkpoints (new runs regardless), matching t4b's own
+    convention. If A's K=20 axis is flat like its K=50 axis, 18.3 gains a
+    second K for free; if it is not, that is itself a finding about where the
+    marginal client starts to matter.
+
+    E'S K=20 IS THE DEGENERATE RUNG (one full-batch step per local epoch --
+    the K-ladder's own flagged control). That degeneracy is CONSTANT across
+    the f arms, and the reading is within-setup against E's own f=1.0 control,
+    so it cancels; but E's panel is not comparable to the others on the E
+    semantics and must not be read as if it were.
+
+    COST WARNING. C's block is roughly half the manifest's slot-hours on its
+    own (40,000 rounds at f=1.0 becomes 160,000 at f=0.25, on the slowest setup
+    in the study). Specs are emitted longest-first, so truncating the sweep
+    after C's f=0.25 cells still leaves every other setup complete.
+
+    > DECISION RULE. Compare t_first_cross in ROUNDS and in total_steps against
+    > the f=1.0 control, per setup, with client_weight_divergence beside it.
+    > (a) Flat in rounds, as on the anchor -> 18.4's distinction holds across
+    >     architectures and the paper can state it as a property of grokking
+    >     under federation rather than of the anchor.
+    > (b) Delay grows as f falls -> the marginal client carries signal on this
+    >     setup, and "sampling noise averages out" needs the qualifier that it
+    >     does so only where memorisation is not already the bottleneck. Read
+    >     t_memo first: if t_memo is what moves, this is the decay clock at a
+    >     smaller effective client population, not a participation result.
+    """
+    # BUDGETS WERE AUDITED against banked t_first_cross before finalising, and
+    # three of the four original K-ladder-derived controls failed:
+    #
+    #   B  the K=20 wd=0.1 cell crosses at 66,100-98,200 -- measured at
+    #      p1_k_collapse_budget's 200,000-step budget. The 100,000 steps first
+    #      drafted here would censor two of three seeds ON THE CONTROL. Base is
+    #      40,000 rounds, and with checkpoint_every=2,000 the control
+    #      hash-matches p1_k_collapse_budget's banked cell (verified).
+    #   D  the K-ladder K=20 cell is 1/3 GROKKED (t_fc inf, inf, 95,600 at
+    #      100,000 steps) -- a censored reference is not a control. Rebased on
+    #      t3b_partitions' iid K=20 cell: 250,000 steps, banked, t_fc 94,300.
+    #   E  1.7x headroom against t3b's 3.6x at the same K. Rebased on t3b's
+    #      8,000-round cell, also banked.
+    #
+    # C passes (t_fc 5,600-9,100 against 200,000 steps) and keeps the K-ladder
+    # cell. Consequence of the rebasing: D's and E's commons are t3b-style and
+    # carry explicit strategy/fraction_train keys (the f arms override
+    # fraction_train); B's and C's carry neither, like their source manifests.
+    # The asymmetry is hash-dictated -- normalising it would orphan the banked
+    # controls, which is the exact waste this comment exists to prevent.
+    BLOCKS = [
+        ("B", {"mode": "federated", **SETUP_B, "weight_decay": 0.1,
+               "alpha": 0.30, "partition": "iid", "num_clients": 20,
+               "checkpoint_client_weights": True}, 40_000, 2_000),
+        ("C", {"mode": "federated", **SETUP_C, "hidden_width": 256,
+               "alpha": 0.50, "partition": "iid", "num_clients": 20,
+               "checkpoint_client_weights": True}, 40_000, 4_000),
+        ("D", {"mode": "federated", **SETUP_D, "alpha": 0.30,
+               "strategy": "fedavg", "fraction_train": 1.0,
+               "partition": "iid", "num_clients": 20,
+               "checkpoint_client_weights": True}, 50_000, 5_000),
+        ("E", {"mode": "federated", **{k: v for k, v in SETUP_E.items()
+                                       if k != "batch_size"},
+               "n_train": 2000, "n_test": 5000, "batch_size": 100,
+               "strategy": "fedavg", "fraction_train": 1.0,
+               "partition": "iid", "num_clients": 20,
+               "checkpoint_client_weights": True}, 8_000, 800),
+    ]
+    specs = []
+    # A -- built bare so the control hashes to t2_k_breakdown's banked cell.
+    a_tags = {"tier": "T5", "group": "participation_setups",
+              "experiment": "exp4b", "setup": "A"}
+    a_base = {**SETUP_A, "local_epochs": 5, "num_clients": 20,
+              "partition": "iid"}
+    specs += expand_grid(a_base, {"seed": SEEDS3}, tags=a_tags)
+    for frac in (0.5, 0.25):
+        specs += expand_grid(
+            {**a_base, "fraction_train": frac,
+             "num_rounds": round(FL_ROUNDS / frac),
+             "eval_every": round(FL_EVAL_EVERY / frac),
+             "checkpoint_every": round(FL_ROUNDS / frac) // 10,
+             "checkpoint_client_weights": True},
+            {"seed": SEEDS3}, tags=a_tags,
+        )
+    for label, common, rounds, ckpt in BLOCKS:
+        tags = {"tier": "T5", "group": "participation_setups",
+                "experiment": "exp4b", "setup": label}
+        base = {**common, "local_epochs": 5, "eval_every": FL_EVAL_EVERY}
+        # The control: no fraction_train key, so the id matches the banked
+        # K-ladder cell.
+        specs += expand_grid({**base, "num_rounds": rounds,
+                              "checkpoint_every": ckpt},
+                             {"seed": SEEDS3}, tags=tags)
+        for frac in (0.5, 0.25):
+            specs += expand_grid(
+                {**base, "fraction_train": frac,
+                 "num_rounds": round(rounds / frac),
+                 "eval_every": round(FL_EVAL_EVERY / frac),
+                 "checkpoint_every": round(ckpt / frac)},
+                {"seed": SEEDS3}, tags=tags,
+            )
+    return specs
+
+
+def t3a_dirichlet_setups():
+    """PAPER AXIS 3: the Dirichlet ladder on B, C, D and E.
+
+    Written against plans/exp3a-dirichlet-ladder-across-setups.md, which carries
+    the feasibility measurements this builder relies on. Two departures from that
+    plan, both deliberate: A' is dropped (it is out of the paper), and the rung
+    list for E follows the plan's own feasibility table rather than the algebraic
+    setups' full ladder.
+
+    THE GAP. RESULTS 18.1 found the first breakdown in this project that does not
+    dissolve on inspection -- concentrating the Dirichlet draw costs 2.01x -- and
+    18.2 then showed the tail of that ladder is client STARVATION rather than
+    heterogeneity. Both readings are setup A. Meanwhile 17.2 withdrew the
+    partition-structure headline as a general claim, on evidence that the
+    ordering of structured partitions differs per setup. The unstructured axis
+    now has to be asked the same question, or "heterogeneity costs time" inherits
+    exactly the generality that "coherent shards help" just lost.
+
+    A IS IN, AT K=10, DESPITE THE PLAN SAYING IT NEEDS NOTHING. The plan's
+    "A is banked" is t3a_dirichlet_band -- K in {20, 50} at alpha=0.25, whose
+    low rungs are exactly the cells 18.2 showed were starvation, not
+    heterogeneity. This figure's panels are all K=10 at working points, and at
+    K=10 A's min shard at dir_alpha=0.01 is ~116 (plan's own table, verified
+    below at generation time), clear of the starvation regime. So A's K=10
+    ladder is the one version of A's ladder that is BOTH matched to the other
+    panels and clean of the confound -- and its 0.5 rung dedups against
+    t3b_partitions like everyone else's. The banked K=20/50 ladder stays as
+    the 18.1/18.2 reading; this is not a re-run of it.
+
+    K=10, AND THAT IS THE WHOLE REASON THE LADDER IS FEASIBLE. The Dirichlet
+    partitioner shards over target classes, so a concentrated draw on a dataset
+    with few samples per class empties someone's shard and the partitioner
+    correctly refuses. The plan measured the minimum shard directly at each
+    setup's working point: >= 116 samples at K=10 on every algebraic setup
+    against the <= 2 that killed cells in 18.2. So the size confound that
+    required t3a_size_control beside A's low rungs is not in play here, and no
+    size-control arm is bought.
+
+    E IS THE EXCEPTION, ON BOTH COUNTS. MNIST has 10 classes against 97-120, so
+    dirichlet_alpha=0.01 at K=10 empties a shard and raises; its ladder starts at
+    0.1. And the size confound the algebraic setups escape is present here --
+    partitions built for these exact specs, min shard across the three seeds:
+
+        dir_a  0.1 -> 5, 25, 56      1.0 -> 101    10 -> 172    1000 -> 193
+        the banked 0.5 rung -> 62, 83
+
+    against batch_size=100. So on E the 0.1 rung (and the banked 0.5 rung it is
+    read against) puts at least one client below a single batch, which is 18.2's
+    starvation regime rather than a heterogeneity reading. Kept, because dropping
+    it would leave E with no concentrated end at all, but E's low rungs are NOT
+    comparable to the algebraic setups' and the panel must say so. Separating the
+    two would need t3a_size_control's dirichlet_sizes arm rebuilt for MNIST --
+    12 runs, not written, and only worth buying if E's low rung is the cell that
+    ends up carrying a claim.
+
+    THE 0.5 RUNG IS FREE, AND ONLY IF WRITTEN BARE. FedConfig.dirichlet_alpha
+    defaults to 0.5 and t3b_partitions' banked dirichlet cells OMIT the field, so
+    a spec that names it explicitly is a different content hash and re-runs
+    banked work. Every block below inherits t3b's own common dict and adds the
+    rungs as an axis, with the 0.5 rung emitted as a separate bare spec. Verify
+    at generation time: the block should report 3 banked cells per setup.
+
+    > DECISION RULE. Per setup, plot t_first_cross against dirichlet_alpha with
+    > the banked iid cell at the same K as the horizontal reference.
+    > (a) The ladder is flat until the concentrated end on every setup -> 18.1's
+    >     threshold reading generalises and the paper states heterogeneity as a
+    >     threshold effect rather than a gradient.
+    > (b) The threshold sits at a different concentration per setup -> read it
+    >     against each setup's class count and shard geometry before calling it
+    >     an architecture effect; the plan's feasibility table is the first place
+    >     to look, since classes-per-client is what differs most across setups.
+    > (c) Any cell that fails to memorise is not a heterogeneity result. Check
+    >     peak_train_acc first: on the AdamW setups the decay clock (14.3) is the
+    >     competing explanation for every failure, and it is the one that has
+    >     been right so far.
+    """
+    LADDER = [0.01, 0.1, 1.0, 10.0, 1000.0]
+    specs = []
+    for label, base, wp, rounds, _Ks in [
+        ("A", {k: v for k, v in SETUP_A.items()
+               if k not in ("mode", "num_rounds", "eval_every")},
+         {"alpha": 0.30}, 10_000, None),
+        ("B", SETUP_B, {"alpha": 0.30}, 20_000, None),
+        ("C", SETUP_C, {"alpha": 0.40, "hidden_width": 256}, 40_000, None),
+        ("D", SETUP_D, {"alpha": 0.30}, 50_000, None),
+    ]:
+        tags = {"tier": "T3a", "group": "dirichlet_setups", "experiment": "exp3a",
+                "setup": label}
+        common = {"mode": "federated", **base, **wp, "local_epochs": 5,
+                  "strategy": "fedavg", "fraction_train": 1.0,
+                  "num_clients": 10, "partition": "dirichlet",
+                  "num_rounds": rounds, "eval_every": FL_EVAL_EVERY,
+                  "checkpoint_every": max(1, rounds // 10),
+                  "checkpoint_client_weights": True}
+        # The 0.5 rung, BARE -- this is t3b_partitions' banked cell.
+        specs += expand_grid(common, {"seed": SEEDS3}, tags=tags)
+        specs += expand_grid(common, {"dirichlet_alpha": LADDER,
+                                      "seed": SEEDS3}, tags=tags)
+    # E -- MNIST, and 0.01 is infeasible at K=10 (10 classes, empty shard).
+    common = {"mode": "federated", **{k: v for k, v in SETUP_E.items()
+                                      if k != "batch_size"},
+              "n_train": 2000, "n_test": 5000, "batch_size": 100,
+              "local_epochs": 5, "strategy": "fedavg", "fraction_train": 1.0,
+              "num_clients": 10, "partition": "dirichlet", "num_rounds": 8_000,
+              "eval_every": FL_EVAL_EVERY, "checkpoint_every": 800,
+              "checkpoint_client_weights": True}
+    tags = {"tier": "T3a", "group": "dirichlet_setups", "experiment": "exp3a",
+            "setup": "E"}
+    specs += expand_grid(common, {"seed": SEEDS3}, tags=tags)
+    specs += expand_grid(common, {"dirichlet_alpha": LADDER[1:],
+                                  "seed": SEEDS3}, tags=tags)
+    return specs
+
+def x_e50_long():
+    """TIER X: the two E=50 cells t5_local_epochs could not decide, at 4-10x budget.
+
+    THE TWO CELLS, and they fail in OPPOSITE phases. Both are on S_5, which is
+    the split that matters: A, B and E are 3/3 at E=50 and only the S_5 setups
+    break there.
+
+      D (quad-MLP, S_5, wd=1.0) at 250,000 steps: 0/3, and it is NOT a training
+        failure -- peak train accuracy is 100.0 on all three seeds, t_memo
+        2,500-3,500, and test then stalls at 80.4 / 80.8 / 81.7%. Final-quarter
+        slopes are -0.0019, +0.0035 and +0.0146 points per 1,000 steps, so one
+        seed is DECLINING and the other two extrapolate to 0.9M and 4.2M further
+        steps. Memorisation intact, generalisation absent: the exact signature
+        p1_k_collapse_budget's decision rule named as "a federated breakdown of
+        grokking with memorisation intact ... the mechanism the project has been
+        looking for".
+
+      C (transformer, S_5, wd=1.0) at 200,000 steps: 1/3, and it IS a training
+        failure -- the two failing seeds peak at 86.6% and 86.9% TRAIN, below
+        the bar, so they never memorise. C's t_memo scales with E (3,200 at E=5
+        to 32,500 at E=50), so the budget that was ample at E=5 is not at E=50.
+        This is the same shape as 17.2's "C at K=50 is a training failure, not a
+        partition result", reached along the E axis instead.
+
+    WHY THIS IS NOT JUST A LONGER RE-RUN. Eight boundaries in this project have
+    dissolved into censoring on re-measurement, and the ONE that did not
+    (RUNS_TODO 3: B at wd=0 stops rather than slows) was settled by exactly this
+    move -- a single arm at ~10x budget, which found a hard plateau and the
+    mechanism behind it. D's cell is the current best candidate for a second
+    genuine negative, and it cannot be claimed at 250,000 steps.
+
+    BUDGETS are set ABOVE the extrapolations rather than at them, per the rule
+    that produced every re-measurement in this file:
+
+      D -> 40,000 rounds = 2,000,000 steps (8x). Covers the median seed's 0.9M
+           extrapolation with >2x margin. The slowest seed's 4.2M is NOT covered
+           on purpose: if D is still at ~81% after 2M steps with a flat slope,
+           the plateau is the finding and a 4M-step run buys nothing but cost.
+      C -> 20,000 rounds = 1,000,000 steps (5x). The question here is only
+           whether the two seeds MEMORISE; the grokked seed crossed at 31,400
+           with t_fc ~= t_memo (C's delay has collapsed to zero by E=50), so any
+           seed that memorises groks almost immediately.
+
+    EVAL CADENCE is coarsened to every 10 rounds (500 steps) rather than the
+    ladder's every 2 rounds (100 steps). At 2,000,000 steps the ladder's cadence
+    would log 20,000 points per run for a question -- "does it ever cross?" --
+    that 500-step resolution answers. t_memo is ~3,000 on D, so 500 steps still
+    resolves it to ~15%.
+
+    > DECISION RULE.
+    > D: (a) crosses the bar within 2M steps -> the E=50 cell was censored, the
+    >    delay simply grows steeply with E, and D's E axis is a delay story like
+    >    A's. (b) still ~81% with a flat slope -> a real breakdown with
+    >    memorisation intact, the first on the E axis, and it belongs in the
+    >    paper as a stated positive result rather than a censored cell.
+    >    Read final_acc and the final-quarter slope, NOT t_grok.
+    > C: (a) the two seeds memorise and grok -> E=50 was under-budgeted and C's
+    >    ladder is complete as a t_memo story. (b) they still peak below the bar
+    >    at 1M steps -> C cannot train at E=50, which is a statement about the
+    >    setup's optimisation and not about grokking; it then needs saying that
+    >    C's E ladder stops at E=25.
+    """
+    specs = []
+    # D -- identical to t5_local_epochs' E=50 cell except the budget and cadence.
+    specs += expand_grid(
+        {"mode": "federated", **SETUP_D, "alpha": 0.30, "local_epochs": 50,
+         "strategy": "fedavg", "fraction_train": 1.0, "partition": "iid",
+         "num_clients": 10, "num_rounds": 40_000, "eval_every": 10,
+         "checkpoint_every": 4_000, "checkpoint_client_weights": True},
+        {"seed": SEEDS3},
+        tags={"tier": "X", "group": "e50_long", "experiment": "exp_e", "setup": "D"},
+    )
+    # C -- same, at its own working point (width 256, alpha 0.50).
+    specs += expand_grid(
+        {"mode": "federated", **SETUP_C, "hidden_width": 256, "alpha": 0.50,
+         "local_epochs": 50, "partition": "iid", "num_clients": 10,
+         "num_rounds": 20_000, "eval_every": 10, "checkpoint_every": 2_000,
+         "checkpoint_client_weights": True},
+        {"seed": SEEDS3},
+        tags={"tier": "X", "group": "e50_long", "experiment": "exp_e", "setup": "C"},
+    )
+    return specs
+
 BUILDERS = {
+    "x_e50_long": x_e50_long,
+    "t5_local_epochs": t5_local_epochs,
+    "t5_participation": t5_participation,
+    "t3a_dirichlet_setups": t3a_dirichlet_setups,
     "x_b_wd_zero_a04_long": x_b_wd_zero_a04_long,
     "x_b_wd_zero_alpha": x_b_wd_zero_alpha,
     "x_b_wd_zero_fl": x_b_wd_zero_fl,
@@ -2609,6 +3145,24 @@ BUILDERS = {
 }
 
 
+# Manifests allowed to DROP run ids they previously claimed. write_manifest
+# refuses that by default, because an orphaned id means the launcher stops
+# recognising a banked run as done and re-runs completed work. That guard is
+# right for every ordinary edit; it has to be overridden when the dropped cells
+# are ones that must never run again -- which is what its own error message says
+# force is for. One entry, with the reason:
+FORCE_REWRITE = {
+    "x_d_alpha_high": (
+        "drops the five alpha=1.0 cells. alpha is the TRAINING fraction, so 1.0 "
+        "leaves no test set; compute_accuracy over zero samples returns NaN, and "
+        "NaN passed the old sustained-crossing scan, banking them as "
+        "grokked=True at t_grok=0. split_indices now rejects the spec outright, "
+        "so leaving them in would only queue five guaranteed failures. Their "
+        "result JSONs stay on disk as the record."
+    ),
+}
+
+
 def main():
     os.makedirs(MANIFEST_DIR, exist_ok=True)
     which = sys.argv[1:] or list(BUILDERS)
@@ -2625,7 +3179,8 @@ def main():
         # cells, FIFO in build order finishes in 16.7 h against 14.2 h
         # longest-first, because setup D's 6.2 h K=50 runs sit in the fifth
         # block and would start last.
-        if name.startswith(("s5_", "x_", "p1_")) or name == "t2_aggregation_alpha2":
+        if (name.startswith(("s5_", "x_", "p1_", "t5_"))
+                or name in ("t2_aggregation_alpha2", "t3a_dirichlet_setups")):
             specs = _longest_first(specs)
         path = os.path.join(MANIFEST_DIR, name + ".jsonl")
 
@@ -2641,7 +3196,7 @@ def main():
                      and {s["id"] for s in load_manifest(path)}
                      == {s.get("id") or run_id(s) for s in specs})
         if not unchanged:
-            write_manifest(specs, path)
+            write_manifest(specs, path, force=name in FORCE_REWRITE)
         est = sum(estimate_minutes(s) for s in specs)
         print(f"{name}: {len(specs)} runs -> {os.path.relpath(path)} "
               f"(~{est / 60:.1f} slot-hours){'  [unchanged]' if unchanged else ''}")

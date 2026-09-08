@@ -166,7 +166,14 @@ def main():
         print("Nothing to do.")
         return
 
-    launch(todo, gpus, args.per_gpu, args.results_root, args.histories_root)
+    _done, failed = launch(todo, gpus, args.per_gpu, args.results_root,
+                           args.histories_root)
+    # Exit non-zero if anything failed. A sweep is normally detached with
+    # `setsid nohup ... &`, so the status line in the log is the only signal --
+    # and exiting 0 after 60 failed runs reads as a clean sweep to anything
+    # checking programmatically.
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
