@@ -1,0 +1,23 @@
+{
+  "alpha": 0.3,
+  "eval_every": 2,
+  "experiment": "exp_e",
+  "group": "local_epochs",
+  "hidden_width": 256,
+  "id": "fede_addition_f0ca4f68e15e",
+  "local_epochs": 50,
+  "loss": "mse",
+  "lr": 50.0,
+  "mode": "federated",
+  "model": "groknet",
+  "num_clients": 10,
+  "num_rounds": 1000,
+  "optimizer": "gd",
+  "p": 97,
+  "partition": "iid",
+  "seed": 42,
+  "setup": "A",
+  "task": "addition",
+  "tier": "T5",
+  "output_dir": "results/runs/fede_addition_f0ca4f68e15e"
+}
