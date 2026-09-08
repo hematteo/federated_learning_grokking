@@ -1,5 +1,9 @@
 # Grokking under federated learning
 
+[![tests](https://github.com/helpmatteo/federated_learning_grokking/actions/workflows/tests.yml/badge.svg)](https://github.com/helpmatteo/federated_learning_grokking/actions/workflows/tests.yml)
+[![checkpoints on Hugging Face](https://img.shields.io/badge/checkpoints-Hugging%20Face-yellow)](https://huggingface.co/datasets/FedGrok/fedgrok-checkpoints)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Does **grokking** — a model memorising its training set, looking stuck for a long
 time, then abruptly generalising — survive when training is split across many
 clients that only ever average their weights?
