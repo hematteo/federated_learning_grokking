@@ -76,3 +76,6 @@ results/**/*.log
 .pytest_cache/
 .ruff_cache/
 __pycache__/
+
+# Overleaf clone of the paper (separate git repo), not tracked here
+paper_overleaf/
