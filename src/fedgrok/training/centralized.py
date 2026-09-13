@@ -18,6 +18,8 @@ from fedgrok.core.utils import get_device, make_optimizer
 def train(cfg: Config):
     """Run the full training loop. Returns the history dict."""
     torch.manual_seed(cfg.seed)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
     device = get_device()
     print(f"Using device: {device}")
 

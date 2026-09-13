@@ -188,6 +188,11 @@ def run_spec(spec: dict, results_root: str = DEFAULT_RESULTS_DIR,
         "persist_local_opt_state": cfg_dict.get("persist_local_opt_state"),
         "feddyn_alpha": cfg_dict.get("feddyn_alpha"),
         "checkpoint_client_weights": cfg_dict.get("checkpoint_client_weights"),
+        # Which float-sum order the aggregate used and which SCAFFOLD estimator
+        # the control variate came from. Banked rows before 2026-09-09 carry
+        # neither key; read them as "arrival" and 2.
+        "aggregation_order": cfg_dict.get("aggregation_order"),
+        "scaffold_option": cfg_dict.get("scaffold_option"),
         # outcomes — grok_threshold is recorded because it varies by dataset,
         # so a t_grok is only interpretable next to the bar it was measured at.
         "grok_threshold": threshold,

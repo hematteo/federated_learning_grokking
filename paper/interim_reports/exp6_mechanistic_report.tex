@@ -1,0 +1,426 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage[table]{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\definecolor{grokgreen}{HTML}{2E8B57}
+\definecolor{nogrokred}{HTML}{CC3333}
+
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\title{Experiment 6: Mechanistic Analysis of Grokking under Federated Learning}
+\author{Federated Learning Grokking Project}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+% =============================================================================
+\section{Overview}
+\label{sec:exp6-overview}
+
+\begin{itemize}
+  \item \textbf{Goal:} Post-hoc mechanistic analysis of 237 FL runs from
+        Exps~2--3 to answer: \emph{why} does grokking survive (or fail)
+        under federated averaging?
+  \item \textbf{No new training runs.} All analysis uses per-round metrics
+        already logged: test/train accuracy, loss, weight norms (layers~1
+        and~2), IPR, mean client drift $\bar{d}_k$, and client weight
+        divergence $\sigma_w$.
+  \item \textbf{Dataset:} 191 grokked runs + 46 failed runs across
+        $\alpha \in \{0.2, 0.25, 0.3, 0.35, 0.5\}$, $K \in \{2, 5, 10,
+        20, 50, 97\}$, and $\alpha_{\mathrm{dir}} \in \{0.01\text{--}1000\}$.
+\end{itemize}
+
+\noindent\textbf{Four main findings:}
+\begin{enumerate}[label=(\roman*)]
+  \item Drift predicts grokking delay \emph{within} each $\alpha$, not
+        merely as a proxy for $\alpha$.
+  \item IPR onset consistently precedes drift drop (72/72 runs, 12/12
+        threshold combinations).
+  \item Accuracy, IPR, and normalized drift collapse onto shared curves
+        under rescaled time.
+  \item FL disrupts generalization but not memorization: $T_{\mathrm{memo}}$
+        is invariant to $K$ while $T_{\mathrm{grok}}$ varies by up to
+        $2.1\times$.
+\end{enumerate}
+
+
+% =============================================================================
+\section{Representative Run Comparison (Figure~\ref{fig:representative})}
+\label{sec:representative}
+
+\noindent Four runs spanning the mechanistic spectrum:
+
+\begin{itemize}
+  \item \textbf{Healthy grok:} $\alpha{=}0.5$, IID, $K{=}10$
+        --- fast grokking at ${\sim}7{,}600$ steps
+  \item \textbf{Delayed grok:} $\alpha{=}0.25$, $\alpha_{\mathrm{dir}}{=}0.01$,
+        $K{=}10$ --- groks at ${\sim}36{,}600$ steps
+  \item \textbf{Failed (data-limited):} $\alpha{=}0.2$, IID, $K{=}10$
+        --- fails centralized too
+  \item \textbf{Failed (fragmented):} $\alpha{=}0.25$, IID, $K{=}97$
+        --- too many clients
+\end{itemize}
+
+\noindent\textbf{Key observations from six-panel comparison:}
+
+\begin{itemize}
+  \item \textbf{Failed runs} show persistently high drift ($>0.8$),
+        flat IPR (${\sim}0.03$), and train loss that plateaus.
+        Weight norms never reach grokking-associated magnitudes.
+  \item \textbf{Delayed grok} follows the same trajectory as the healthy
+        grok (IPR rises, drift drops, weights plateau) but stretched in time.
+        Final values are identical.
+  \item \textbf{Mean client drift} (panel~d) separates all four cases most
+        cleanly: $K{=}97$ failure $>0.8$; healthy grok $<0.3$.
+\end{itemize}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig6_representative_comparison.png}
+  \caption{\textbf{Representative run comparison.}
+  (a)~Test accuracy, (b)~train loss (log), (c)~IPR,
+  (d)~mean client drift, (e)~client weight divergence,
+  (f)~layer-1 weight norm.}
+  \label{fig:representative}
+\end{figure}
+
+
+% =============================================================================
+\section{Drift Predicts Grokking Delay, Controlling for $\alpha$
+  (Figure~\ref{fig:drift-controlled})}
+\label{sec:drift}
+
+\subsection{The confound}
+
+\begin{itemize}
+  \item Naive analysis: $\rho = 0.70$, $p = 1.6 \times 10^{-29}$
+        across all 237 runs.
+  \item \textbf{But:} 42 of 46 failed runs are $\alpha{=}0.2$, which fails
+        in the centralized setting too.
+  \item Drift correlates with $\alpha$ because both are controlled by the
+        same experimental knobs.
+  \item \textbf{Honest question:} does drift predict $T_{\mathrm{grok}}$
+        \emph{within a fixed $\alpha$}?
+\end{itemize}
+
+\subsection{Within-$\alpha$ correlation (panel~b)}
+
+\begin{itemize}
+  \item Within-$\alpha$ Spearman rank correlations between drift and
+        $T_{\mathrm{grok}}$:
+\end{itemize}
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+$\alpha$ & $n$ & Spearman $\rho$ & $p$-value & Significance \\
+\midrule
+0.25 & 47 & 0.79 & $< 10^{-3}$ & $^{***}$ \\
+0.30 & 51 & 0.70 & $< 10^{-3}$ & $^{***}$ \\
+0.35 & 42 & 0.52 & $< 10^{-3}$ & $^{***}$ \\
+0.50 & 51 & 0.34 & $< 0.05$    & $^{*}$   \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+  \item Strong near the boundary ($\rho = 0.79$ at $\alpha{=}0.25$),
+        weakens in the interior ($\rho = 0.34$ at $\alpha{=}0.5$).
+  \item Expected if drift modulates grokking primarily near criticality.
+\end{itemize}
+
+\subsection{Causal chain: $K \to$ drift $\to T_{\mathrm{grok}}$ (panel~c)}
+
+\begin{itemize}
+  \item At $\alpha{=}0.3$ (IID, Exp~2): increasing $K$ from 2 to 97
+        monotonically increases both drift and $T_{\mathrm{grok}}$.
+  \item Heterogeneity is controlled (IID), so the only variable is $K$.
+  \item $\rho = 1.0$ between drift and $T_{\mathrm{grok}}$ across $K$ values.
+\end{itemize}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig7_drift_alpha_controlled.png}
+  \caption{\textbf{Drift predicts grokking delay, controlling for $\alpha$.}
+  (a)~$T_{\mathrm{grok}}$ vs.\ drift (all runs; red box: 42/46 failures
+  are $\alpha{=}0.2$).
+  (b)~Within-$\alpha$ Spearman $\rho$.
+  (c)~$K \to$ drift $\to T_{\mathrm{grok}}$ at $\alpha{=}0.3$.}
+  \label{fig:drift-controlled}
+\end{figure}
+
+
+% =============================================================================
+\section{Temporal Ordering: IPR Rise Precedes Drift Drop
+  (Figure~\ref{fig:temporal})}
+\label{sec:temporal}
+
+\subsection{Question}
+
+\begin{itemize}
+  \item Do clients align first, then Fourier features emerge?
+        (drift drops $\to$ IPR rises)
+  \item Or do Fourier features crystallize first, then clients converge?
+        (IPR rises $\to$ drift drops)
+\end{itemize}
+
+\subsection{Method}
+
+\begin{itemize}
+  \item For each of 72 grokking runs (Exp~3a, $K{=}10$), detect:
+  \begin{itemize}
+    \item $T_{\mathrm{IPR\ onset}}$: first round IPR exceeds $2.5\times$
+          its early-training baseline
+    \item $T_{\mathrm{drift\ drop}}$: first round (post-peak) smoothed
+          drift falls below 50\% of its peak
+  \end{itemize}
+\end{itemize}
+
+\subsection{Results}
+
+\begin{itemize}
+  \item IPR onset precedes drift drop in \textbf{72 of 72} runs
+        (zero exceptions).
+  \item Median lag: $T_{\mathrm{drift\ drop}} - T_{\mathrm{IPR\ onset}}
+        = 10{,}775$ steps.
+  \item Wilcoxon signed-rank test: $p = 1.8 \times 10^{-13}$.
+\end{itemize}
+
+\subsection{Robustness}
+
+\begin{itemize}
+  \item Tested 12 combinations: IPR threshold
+        $\in \{2\times, 2.5\times, 3\times, 4\times\}$ $\times$
+        drift fraction $\in \{30\%, 50\%, 70\%\}$.
+  \item \textbf{All 12 settings:} IPR rises first in 100\% of runs
+        (Figure~\ref{fig:temporal}d).
+\end{itemize}
+
+\subsection{Caveats}
+
+\begin{itemize}
+  \item \textbf{Temporal precedence $\neq$ causation.} Both events could
+        be driven by a third variable (e.g., weight norm growth reaching
+        a critical value).
+  \item \textbf{Threshold asymmetry.} IPR onset = crossing a low absolute
+        value (${\sim}0.05$); drift drop = falling below a fraction of peak.
+        The \emph{ordering} is robust; the \emph{lag magnitude} depends on
+        threshold choice.
+\end{itemize}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig8_temporal_ordering.png}
+  \caption{\textbf{Temporal ordering.}
+  (a)~$T_{\mathrm{IPR\ onset}}$ vs.\ $T_{\mathrm{drift\ drop}}$:
+  all points above diagonal.
+  (b)~Lag histogram (median = 10{,}775 steps).
+  (c)~Box plots: both precede $T_{\mathrm{grok}}$; IPR leads more.
+  (d)~Robustness heatmap: 100\% IPR-first across all threshold combos.}
+  \label{fig:temporal}
+\end{figure}
+
+
+% =============================================================================
+\section{Scaling Collapse (Figure~\ref{fig:collapse})}
+\label{sec:collapse}
+
+\subsection{Setup}
+
+\begin{itemize}
+  \item Rescale time as $\tau = (t - T_{\mathrm{grok}}) /
+        (T_{\mathrm{grok}} - T_{50})$, where $T_{50}$ = first step
+        test accuracy reaches 50\%.
+  \item Apply to 117 grokking runs from Exps~2--3.
+\end{itemize}
+
+\subsection{Accuracy collapse (panel~b) --- expected}
+
+\begin{itemize}
+  \item Test accuracy curves collapse onto a sigmoid (fitted $k \approx 2.48$).
+  \item \textbf{Partly tautological:} centering on the transition and scaling
+        by the width will collapse any sigmoid-like curve.
+  \item Confirms transitions are sigmoidal, but not evidence of deeper
+        universality on its own.
+\end{itemize}
+
+\subsection{IPR and drift collapse (panels~c, d) --- non-trivial}
+
+\begin{itemize}
+  \item IPR \textbf{also collapses} under the same rescaling, despite not
+        being constrained by the procedure:
+  \begin{itemize}
+    \item Begins rising at $\tau \approx -3$ (3 transition widths before
+          grokking)
+    \item Plateaus at $\tau \approx 0$
+  \end{itemize}
+  \item Normalized drift follows a universal inverted-U:
+  \begin{itemize}
+    \item Peaks at $\tau \approx -2$
+    \item Declines through the transition
+    \item Stabilizes at ${\sim}50\%$ of peak after grokking ($\tau > 0$)
+  \end{itemize}
+  \item \textbf{Implication:} feature crystallization, client convergence,
+        and generalization evolve on a single intrinsic timescale that varies
+        across configurations but maintains fixed internal structure.
+\end{itemize}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig9_universal_collapse.png}
+  \caption{\textbf{Scaling collapse.}
+  (a)~Raw trajectories (117 runs).
+  (b)~Rescaled accuracy (expected for sigmoids).
+  (c)~IPR collapse (non-trivial): features emerge at $\tau \approx -3$.
+  (d)~Drift collapse (non-trivial): peaks at $\tau \approx -2$.
+  Black = median; shading = IQR.}
+  \label{fig:collapse}
+\end{figure}
+
+
+% =============================================================================
+\section{Two-Timescale Separation (Figure~\ref{fig:two-timescales})}
+\label{sec:timescales}
+
+\subsection{Definitions}
+
+\begin{itemize}
+  \item $T_{\mathrm{memo}}$: first step with train accuracy $\geq 99\%$
+        (memorization complete)
+  \item $T_{\mathrm{grok}}$: first step with test accuracy $\geq 95\%$
+        permanently (generalization)
+  \item Generalization delay: $\Delta T = T_{\mathrm{grok}} - T_{\mathrm{memo}}$
+\end{itemize}
+
+\subsection{Within-$\alpha$ variability (panel~a)}
+
+\begin{itemize}
+  \item CV of $T_{\mathrm{memo}}$ vs.\ $T_{\mathrm{grok}}$ within each
+        $\alpha$, across all $K$ and heterogeneity:
+\end{itemize}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+$\alpha$ & CV($T_{\mathrm{memo}}$) & CV($T_{\mathrm{grok}}$) & Ratio \\
+\midrule
+0.25 & 0.042 & 0.159 & $4\times$ \\
+0.30 & 0.033 & 0.068 & $2\times$ \\
+0.35 & 0.022 & 0.026 & $1\times$ \\
+0.50 & 0.005 & 0.005 & $1\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+  \item Near the boundary ($\alpha{=}0.25$): $T_{\mathrm{grok}}$ is
+        $4\times$ more variable than $T_{\mathrm{memo}}$.
+  \item In the interior ($\alpha \geq 0.35$): both equally stable.
+\end{itemize}
+
+\subsection{$T_{\mathrm{memo}}$ vs.\ $K$ (panel~b)}
+
+\begin{itemize}
+  \item $T_{\mathrm{memo}}$ is nearly flat from $K{=}2$ to $K{=}50$:
+  \begin{itemize}
+    \item $\alpha{=}0.3$: within $\pm 1\%$
+    \item $\alpha{=}0.5$: within $\pm 0.3\%$
+    \item Only at $K{=}97$: modest $+17\%$ increase ($\alpha{=}0.3$)
+  \end{itemize}
+  \item $T_{\mathrm{grok}}$ diverges:
+  \begin{itemize}
+    \item $\alpha{=}0.3$: $12{,}822$ ($K{=}2$) $\to$ $27{,}422$ ($K{=}97$)
+          --- $2.1\times$ slowdown
+  \end{itemize}
+  \item \textbf{Conclusion:} FL does not impair memorization. It specifically
+        disrupts the transition from memorization to generalization.
+\end{itemize}
+
+\subsection{Drift prolongs generalization delay (panel~c)}
+
+\begin{itemize}
+  \item $\Delta T = T_{\mathrm{grok}} - T_{\mathrm{memo}}$ vs.\ drift,
+        with within-$\alpha$ Spearman:
+  \begin{itemize}
+    \item $\alpha{=}0.25$: $\rho \approx 0.73$
+    \item Weakens in the interior, paralleling Section~\ref{sec:drift}.
+  \end{itemize}
+\end{itemize}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig10_two_timescales.png}
+  \caption{\textbf{FL disrupts generalization, not memorization.}
+  (a)~Within-$\alpha$ CV: $T_{\mathrm{grok}}$ up to $4\times$ more
+  variable than $T_{\mathrm{memo}}$.
+  (b)~$T_{\mathrm{memo}}$ (dashed, flat) vs.\ $T_{\mathrm{grok}}$
+  (solid, diverging) vs.\ $K$.
+  (c)~Generalization delay vs.\ drift with within-$\alpha$ correlations.}
+  \label{fig:two-timescales}
+\end{figure}
+
+
+% =============================================================================
+\section{Summary}
+\label{sec:exp6-summary}
+
+\begin{enumerate}
+  \item \textbf{Drift predicts grokking delay within each $\alpha$.}
+  \begin{itemize}
+    \item Within-$\alpha$ Spearman $\rho$: 0.34 ($\alpha{=}0.5$) to
+          0.79 ($\alpha{=}0.25$)
+    \item Not a proxy for $\alpha$; carries independent predictive information
+    \item \emph{Caveat:} 42/46 failures are $\alpha{=}0.2$ (fails centralized)
+  \end{itemize}
+
+  \item \textbf{IPR rise precedes drift drop (temporal ordering).}
+  \begin{itemize}
+    \item 72/72 runs, 12/12 threshold combinations, zero exceptions
+    \item Consistent with: Fourier features crystallize in global model first,
+          then clients converge
+    \item \emph{Caveat:} temporal ordering $\neq$ causation; lag magnitude
+          depends on threshold choice
+  \end{itemize}
+
+  \item \textbf{Approximate scaling collapse.}
+  \begin{itemize}
+    \item Under $\tau = (t - T_{\mathrm{grok}})/(T_{\mathrm{grok}} - T_{50})$:
+          test accuracy, IPR, and drift collapse onto shared curves
+    \item Accuracy collapse is partly tautological (any sigmoid collapses)
+    \item IPR and drift collapses are non-trivial $\to$ single intrinsic
+          timescale governs the transition
+  \end{itemize}
+
+  \item \textbf{FL disrupts generalization, not memorization.}
+  \begin{itemize}
+    \item $T_{\mathrm{memo}}$ invariant to $K$ (CV $\approx$ 0.005--0.04)
+    \item $T_{\mathrm{grok}}$ varies by up to $2.1\times$
+    \item Drift specifically prolongs the memorization-to-generalization gap
+  \end{itemize}
+\end{enumerate}
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item \textbf{No model checkpoints.} Cannot compute Fourier spectra of
+        $W_1$ at specific timepoints to test whether clients converge to
+        the same Fourier modes. Requires re-running with checkpoint saving.
+  \item \textbf{No per-client trajectories.} Individual client IPR, loss,
+        and weights are aggregated before logging. Cannot distinguish
+        synchronized vs.\ leader-follower transitions.
+  \item \textbf{Limited FL-specific failures.} Only 4/46 failures are
+        FL-caused (not $\alpha{=}0.2$). Exps~4--5 will provide more.
+  \item \textbf{Single architecture and task.} All results are for 2-layer
+        MLP on modular addition ($p{=}97$). Generalization to other settings
+        is open.
+\end{itemize}
+
+\end{document}

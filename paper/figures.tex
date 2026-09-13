@@ -22,7 +22,7 @@
 \begin{document}
 
 {\Large\bfseries Federated learning and grokking: revised figures}\\[2pt]
-{\small Regenerated from the v2 corpus (1{,}685 runs, five setups). Every number in a caption is computed by the plotting script and written to \texttt{figures/figure\_numbers.json}. Figures are sized to the 5.5\,in text width; each is pinned with \texttt{[H]} so it stays next to the text that describes it. Throughout, points are Kaplan--Meier medians over runs, error bars span the minimum to maximum over runs, a hollow marker means not every run held the bar to the end, and a cross means no run reached the event within budget (``failed to grok'').}
+{\small Regenerated from the v2 corpus (1{,}685 runs, five setups). Every number in a caption is computed by the plotting script and written to \texttt{figures/figure\_numbers.json}. Figures are drawn at the 5.5\,in text width in 7\,pt Helvetica with a colour-blind-safe palette fixed per entity (setup A and the operand split are always blue, and so on); each is pinned with \texttt{[H]} so it stays next to the text that describes it. Throughout, points are Kaplan--Meier medians over runs, error bars span the minimum to maximum over runs, a hollow marker means not every run held the bar to the end, and a cross means no run reached the event within budget (``failed to grok'').}
 
 \medskip
 \begin{tabular}{@{}p{1.0in}p{0.65in}p{3.4in}@{}}
@@ -97,8 +97,8 @@ Fig.\ 9 fingerprints & Fig.\ A2 & first-crossing time per method and cell \\
   \centering
   \includegraphics[width=\textwidth]{fig5_drift_mitigation.pdf}
   \caption{\textbf{Client drift is a signature, not the cause; adaptive server optimisers are 10--20$\times$ faster than FedAvg once every method is calibrated.}
-  (a)~Memorise-to-generalise delay against mean client weight divergence per round, averaged over the window before the first crossing, for every FedAvg run on setup A, coloured by the design axis that produced it. Subsampling clients and unequal shard sizes raise divergence at no cost; label conflict raises it and costs time; SCAFFOLD (diamonds) sits at high pre-crossing divergence with a short delay; FedProx (crosses) at low divergence is censored. Reducing drift is therefore neither necessary nor sufficient.
-  (b--d)~Test-accuracy trajectories on the three hard cells, five runs per method, each method at its own calibrated server learning rate (FedAdam and FedYogi 0.1, FedAvgM 1.0 with momentum 0.9). FedAdam and FedYogi cross at 2{,}000--5{,}000 steps against FedAvg's 31{,}000--61{,}000; SCAFFOLD is third and FedAvgM fourth; FedProx at $\mu{=}0.01$ is censored on H1 and H2 and $11\times$ slower than FedAvg on H3. Kaplan--Meier medians per method are in Fig.~\ref{fig:A2}. Server learning rates were calibrated at $E{=}5$ and applied at $E{=}25$ and $50$.}
+  (a)~Memorise-to-generalise delay against mean client weight divergence per round, averaged over the window before the first crossing, for every FedAvg run on setup A, coloured by the design axis that produced it. Subsampling clients and unequal shard sizes raise divergence at no cost; label conflict raises it and costs time; FedProx (crosses) at low divergence is censored. Reducing drift is therefore neither necessary nor sufficient.
+  (b--d)~Test-accuracy trajectories on the three hard cells, five runs per method, each method at its own calibrated server learning rate (FedAdam and FedYogi 0.1, FedAvgM 1.0 with momentum 0.9). FedAdam and FedYogi cross at 2{,}000--5{,}000 steps against FedAvg's 31{,}000--61{,}000; FedAvgM is third; FedProx at $\mu{=}0.01$ is censored on H1 and H2 and $11\times$ slower than FedAvg on H3. Kaplan--Meier medians per method are in Fig.~\ref{fig:A2}. Server learning rates were calibrated at $E{=}5$ and applied at $E{=}25$ and $50$. SCAFFOLD is withheld from both panels until its re-run with corrected client state completes.}
   \label{fig:drift}
 \end{figure}
 \replaces{Replaces draft Figs.~5, 8 and 9. Withdraw ``client drift is the main federated perturbation''; delete the weight-decay column of Fig.~8 (it ran $\mathrm{lr}\cdot\lambda \in \{0.5, 5, 50\}$).}
@@ -142,7 +142,7 @@ Fig.\ 9 fingerprints & Fig.\ A2 & first-crossing time per method and cell \\
 \begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{figA2_algorithms_first_crossing.pdf}
-  \caption{\textbf{First-crossing time per method and cell.} Five runs per method; the bar is the Kaplan--Meier median, crosses are runs censored at the budget. H1: $\alpha{=}0.25$, $K{=}10$, $E{=}25$, IID. H2: same, Dirichlet 0.1. H3: $\alpha{=}0.30$, $K{=}10$, $E{=}50$, Dirichlet 0.1. The ordering is identical on $t_{\mathrm{grok}}$.}
+  \caption{\textbf{First-crossing time per method and cell.} Five runs per method; the bar is the Kaplan--Meier median, crosses are runs censored at the budget. H1: $\alpha{=}0.25$, $K{=}10$, $E{=}25$, IID. H2: same, Dirichlet 0.1. H3: $\alpha{=}0.30$, $K{=}10$, $E{=}50$, Dirichlet 0.1. The ordering is identical on $t_{\mathrm{grok}}$. SCAFFOLD is withheld pending its re-run.}
   \label{fig:A2}
 \end{figure}
 

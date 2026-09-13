@@ -49,6 +49,23 @@ class FedConfig(Config):
                                           #  are always evaluated.
     checkpoint_every: int = 0                # save checkpoints every N rounds (0 = disabled)
     checkpoint_client_weights: bool = False  # save per-client W1 weights at checkpoints
+    # Order in which client results are summed at aggregation. "cid" sorts them
+    # by client id so the float32 sum is the same every run; "arrival" is
+    # Flower's native order -- whichever Ray actor returned first -- and is the
+    # behaviour every run banked before 2026-09-09 had. RESULTS 23 measured what
+    # that costs: identical config and seed, two runs, peak train accuracy on
+    # setup C differing by up to 12.7 points. Not a training change: the
+    # aggregate is the same weighted mean, summed in a fixed order.
+    aggregation_order: Literal["cid", "arrival"] = "cid"
+    # SCAFFOLD's control-variate estimator (Karimireddy et al. 2019, sec 3).
+    # 2 = Option II, (x - y_i)/(lr * K), which inverts the local update and is
+    #     exact only for plain SGD; the banked anchor runs use it.
+    # 1 = Option I, the mean local gradient accumulated during the local steps.
+    #     Unbiased under any local optimiser, so it is the only valid choice
+    #     under AdamW -- _build_strategy refuses option 2 there.
+    # Under plain GD at momentum 0 the two coincide exactly at every E
+    # (tests/test_scaffold.py), so option 1 costs nothing on the anchor.
+    scaffold_option: int = 2
 
     # Override defaults for federated setting
     hidden_width: int = 128               # slightly overparameterized for FL

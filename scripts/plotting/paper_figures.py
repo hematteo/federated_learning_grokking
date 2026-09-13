@@ -8,11 +8,13 @@ history_*.json; nothing is typed in. Figure-by-figure numbers used in captions
 are written to paper/figures/figure_numbers.json. Captions live in
 paper/figures.tex.
 
-Style follows the 1 Sep draft's figures: boxed axes, centred descriptive titles,
-framed legends, mathtext axis labels, bold panel letters, error bars that span
-the runs, a viridis-like palette for the training fraction, IID solid and
-non-IID dashed, and a cross for "failed to grok within budget". Marker fill is
-the held fraction (hollow when no run held the bar to the end).
+Style: 5.5 in wide (ICLR text width, 1:1), Helvetica 7 pt, open axes, hairline
+grid, Okabe-Ito hues fixed per entity (validated colour-blind-safe), a bold
+panel letter folded into a left-aligned title, unframed legends kept off the
+data, error bars that span the runs, IID solid and non-IID dashed, and a cross
+for "failed to grok within budget". Marker fill is the held fraction (hollow
+when no run held the bar to the end). SCAFFOLD is withheld (WITHHOLD) until
+its re-run with server-side client state lands; --include-withheld draws it.
 
 Statistics. Per-cell times are Kaplan-Meier medians over runs, right-censoring
 runs whose event (memorisation, or first crossing of the bar) did not happen
@@ -46,26 +48,48 @@ CSV = "results/data/runs_v2.csv"
 HIST = "results/runs"
 OUT = "paper/figures"
 
-# The draft's palettes: matplotlib's categorical set for setups, partitions and
-# aggregation rules (FedAvg grey, FedAdam green, FedProx blue as in its Fig. 8),
-# and its purple / blue / teal / orange for the training fraction.
-COL = {"A": "#1f77b4", "B": "#ff7f0e", "C": "#2ca02c", "D": "#d62728", "E": "#9467bd"}
+# Okabe-Ito hues, one per entity and fixed across every figure (setup A and the
+# operand split are always blue, and so on). Validated colour-blind-safe on all
+# pairs; FedAvg is the near-black baseline rather than a sixth hue.
+OI = {
+    "blue": "#0072B2",
+    "orange": "#E69F00",
+    "green": "#009E73",
+    "vermillion": "#D55E00",
+    "purple": "#CC79A7",
+    "sky": "#56B4E9",
+}
+COL = {
+    "A": OI["blue"],
+    "B": OI["orange"],
+    "C": OI["green"],
+    "D": OI["vermillion"],
+    "E": OI["purple"],
+}
 PART = {
-    "operand": "#1f77b4",
-    "coset": "#9467bd",
-    "target": "#d62728",
-    "label_block": "#ff7f0e",
-    "dirichlet": "#2ca02c",
+    "operand": OI["blue"],
+    "coset": OI["purple"],
+    "target": OI["vermillion"],
+    "label_block": OI["orange"],
+    "dirichlet": OI["green"],
 }
 STRAT = {
-    "fedavg": "#7f7f7f",
-    "fedadam": "#2ca02c",
-    "fedyogi": "#17becf",
-    "scaffold": "#9467bd",
-    "fedavgm": "#ff7f0e",
-    "fedprox": "#1f77b4",
+    "fedavg": "#222222",
+    "fedadam": OI["green"],
+    "fedyogi": OI["sky"],
+    "scaffold": OI["purple"],
+    "fedavgm": OI["orange"],
+    "fedprox": OI["blue"],
 }
-ALPHA_COL = {0.25: "#9b59b6", 0.3: "#3498db", 0.35: "#1abc9c", 0.5: "#f39c12"}
+ALPHA_COL = {
+    0.25: OI["vermillion"],
+    0.3: OI["blue"],
+    0.35: OI["green"],
+    0.5: OI["orange"],
+}
+# Withheld from every figure until re-run with the fixed server-side client
+# state (RUNS_TODO, 2026-09-09). `--include-withheld` draws them anyway.
+WITHHOLD = {"scaffold"}
 NAME = {
     "A": "A: quad-MLP, mod 97, GD",
     "B": "B: transformer, mod 113",
@@ -73,41 +97,57 @@ NAME = {
     "D": "D: quad-MLP, $S_5$",
     "E": "E: MLP, MNIST",
 }
-INK, INK2, MUTED, GRID = "#111111", "#444444", "#888888", "#d9d9d9"
+INK, INK2, MUTED, GRID = "#111111", "#444444", "#888888", "#e8e8e8"
 WITHHELD = 0.45  # line alpha for setup C
 
+# Sized for ICLR's 5.5 in text width at 1:1, so 7 pt here is 7 pt on the page.
 plt.rcParams.update(
     {
         "font.family": "sans-serif",
-        "font.size": 8,
-        "axes.titlesize": 8,
-        "axes.labelsize": 8,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "legend.fontsize": 6.8,
-        "legend.title_fontsize": 7,
-        "axes.spines.top": True,
-        "axes.spines.right": True,
+        "font.sans-serif": ["Helvetica", "Helvetica Neue", "Arial", "DejaVu Sans"],
+        "mathtext.fontset": "custom",
+        "mathtext.rm": "Helvetica",
+        "mathtext.it": "Helvetica:italic",
+        "mathtext.bf": "Helvetica:bold",
+        "mathtext.sf": "Helvetica",
+        "font.size": 7,
+        "axes.titlesize": 7,
+        "axes.labelsize": 7,
+        "xtick.labelsize": 6.5,
+        "ytick.labelsize": 6.5,
+        "legend.fontsize": 6,
+        "legend.title_fontsize": 6.5,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
         "axes.edgecolor": "#333333",
-        "axes.linewidth": 0.8,
+        "axes.linewidth": 0.6,
         "xtick.color": "#333333",
         "ytick.color": "#333333",
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "xtick.major.size": 2.5,
+        "ytick.major.size": 2.5,
+        "xtick.major.width": 0.6,
+        "ytick.major.width": 0.6,
+        "xtick.major.pad": 2,
+        "ytick.major.pad": 2,
         "axes.labelcolor": INK,
         "text.color": INK,
         "axes.grid": True,
         "grid.color": GRID,
-        "grid.linewidth": 0.6,
+        "grid.linewidth": 0.5,
         "axes.axisbelow": True,
-        "lines.linewidth": 1.5,
-        "lines.markersize": 5,
-        "legend.frameon": True,
-        "legend.framealpha": 0.92,
-        "legend.edgecolor": "#cccccc",
-        "legend.fancybox": False,
-        "axes.titlelocation": "center",
+        "lines.linewidth": 1.3,
+        "lines.markersize": 4,
+        "legend.frameon": False,
+        "legend.handlelength": 1.8,
+        "legend.borderaxespad": 0.3,
+        "legend.labelspacing": 0.3,
+        "legend.columnspacing": 1.2,
+        "axes.titlelocation": "left",
         "axes.titleweight": "normal",
-        "axes.titlepad": 5,
-        "savefig.dpi": 220,
+        "axes.titlepad": 4,
+        "savefig.dpi": 300,
         "figure.dpi": 100,
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
@@ -368,12 +408,14 @@ def log_steps(ax, axis="y", lo=None, hi=None, dense=True):
 
 
 def letter(ax, L):
-    """The draft's bold panel letter: outside the axes, above the y-axis labels."""
-    ax.annotate(
-        f"{L})", xy=(0, 1), xycoords="axes fraction", xytext=(-30, 3),
-        textcoords="offset points", ha="left", va="bottom", fontsize=9,
-        fontweight="bold", annotation_clip=False,
+    """Bold panel letter folded into a left-aligned title: "(a) Title"."""
+    ax.set_title(
+        r"$\bf{(" + L + r")}$ " + ax.get_title(loc="left"), loc="left", fontsize=7
     )
+
+
+def order5():
+    return [s for s in ORDER5 if s not in WITHHOLD]
 
 
 def mark(ax, x, y, color, frac, marker="o", size=5, z=4, alpha=1.0):
@@ -383,9 +425,9 @@ def mark(ax, x, y, color, frac, marker="o", size=5, z=4, alpha=1.0):
         [y],
         marker=marker,
         ms=size,
-        mec=color,
+        mec="white" if frac >= 0.999 else color,
         mfc=color if frac >= 0.999 else "white",
-        mew=1.2,
+        mew=0.7 if frac >= 0.999 else 1.0,
         ls="none",
         zorder=z,
         alpha=alpha,
@@ -434,11 +476,11 @@ def series(
     color,
     label=None,
     marker="o",
-    lw=1.5,
+    lw=1.3,
     ls="-",
     zorder=3,
     alpha=1.0,
-    size=5,
+    size=4,
     err=None,
 ):
     """A line with held-fraction markers and, when err=(lo, hi) is given, error
@@ -463,9 +505,9 @@ def series(
                         [y],
                         yerr=[[max(y - min(lo, y), 0)], [max(max(hi, y) - y, 0)]],
                         color=color,
-                        capsize=2.5,
-                        elinewidth=0.9,
-                        capthick=0.9,
+                        capsize=2,
+                        elinewidth=0.7,
+                        capthick=0.7,
                         ls="none",
                         marker="none",
                         zorder=zorder,
@@ -485,7 +527,7 @@ def span(sts, key, scale=1.0):
 
 def setup_handles(setups):
     return [
-        Line2D([], [], color=COL[s], lw=1.5, marker="o", label=NAME[s]) for s in setups
+        Line2D([], [], color=COL[s], lw=1.3, marker="o", label=NAME[s]) for s in setups
     ]
 
 
@@ -500,7 +542,10 @@ def save(fig, name):
     os.makedirs(OUT, exist_ok=True)
     for ext in ("png", "pdf"):
         fig.savefig(
-            os.path.join(OUT, f"{name}.{ext}"), bbox_inches="tight", facecolor="white"
+            os.path.join(OUT, f"{name}.{ext}"),
+            bbox_inches="tight",
+            pad_inches=0.02,
+            facecolor="white",
         )
     plt.close(fig)
     print(f"  wrote {OUT}/{name}.png/.pdf")
@@ -537,8 +582,8 @@ def fig1(rows):
     fig, axes = plt.subplots(
         1,
         3,
-        figsize=(7.2, 2.6),
-        gridspec_kw=dict(width_ratios=[1.2, 1, 1], wspace=0.5),
+        figsize=(5.5, 1.7),
+        gridspec_kw=dict(width_ratios=[1.15, 1, 1], wspace=0.5),
     )
     numbers = {"ratio": {}, "ladders": {}}
     # (a) the draft's Fig. 1: slowdown ratio vs K on the anchor, alpha as the series
@@ -583,8 +628,8 @@ def fig1(rows):
                     textcoords="offset points",
                     ha="right",
                     va="center",
-                    fontsize=6.5,
-                    color=col,
+                    fontsize=6,
+                    color=INK2,
                 )
         ax.errorbar(
             xs,
@@ -627,8 +672,8 @@ def fig1(rows):
             textcoords="offset points",
             ha="right",
             va="center",
-            fontsize=6.5,
-            color=ALPHA_COL[0.25],
+            fontsize=6,
+            color=INK2,
         )
         numbers["ratio"]["alpha=0.25 K=97 operand"] = {
             "median_ratio": round(m, 3),
@@ -645,7 +690,7 @@ def fig1(rows):
     ax.set_ylabel(
         r"$t^{\mathrm{FL}}_{\mathrm{first\,cross}}\;/\;t^{\mathrm{cent}}_{\mathrm{first\,cross}}$"
     )
-    ax.set_title("Slowdown vs K (A, IID)")
+    ax.set_title("Slowdown vs K (setup A, IID)")
     ax.legend(loc="center left", title="Train fraction α")
     # (b), (c) the two clocks on A, B, D
     for s, alpha, wd in (("A", 0.3, None), ("B", 0.3, 0.1), ("D", 0.3, 1.0)):
@@ -686,12 +731,17 @@ def fig1(rows):
     log_steps(axes[2], "y", 200, 3e5)
     axes[1].set_ylabel(TMEMO + " (gradient steps)")
     axes[2].set_ylabel("delay (gradient steps)")
-    axes[1].set_title("Time to Memorise vs K")
+    axes[1].set_title("Time to memorise vs K")
     axes[2].set_title("Delay vs K")
-    axes[1].legend(loc="upper left", handles=setup_handles("ABD") + [CENS_HANDLE])
     for ax, L in zip(axes, "abc"):
         letter(ax, L)
     fig.tight_layout()
+    fig.legend(
+        handles=setup_handles("ABD") + [CENS_HANDLE],
+        loc="upper center",
+        ncol=4,
+        bbox_to_anchor=(0.5, -0.1),
+    )
     NUMBERS["fig1"] = numbers
     save(fig, "fig1_two_clocks")
 
@@ -720,7 +770,7 @@ def _e_ladder(rows, s):
 
 
 def fig2(rows):
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.6), gridspec_kw=dict(wspace=0.5))
+    fig, axes = plt.subplots(1, 3, figsize=(5.5, 1.7), gridspec_kw=dict(wspace=0.5))
     numbers = {}
     lads = {s: _e_ladder(rows, s) for s in "ABCDE"}
     # (a) the draft's Fig. 3 on the anchor, with memorisation added: the gap is the delay
@@ -752,13 +802,13 @@ def fig2(rows):
         textcoords="offset points",
         ha="right",
         va="center",
-        fontsize=7,
-        color=COL["A"],
+        fontsize=6.5,
+        color=INK2,
     )
     cat_axis(ax, [str(E) for E in ES])
     ax.set_ylim(0, 26)
     ax.set_ylabel("Gradient steps (×1000)")
-    ax.set_title("Grokking Time vs E (A)")
+    ax.set_title("Grokking time vs E (setup A)")
     ax.legend(loc="upper left")
     # (b) memorisation in rounds, five setups
     for s in "ABCDE":
@@ -787,7 +837,7 @@ def fig2(rows):
         numbers[s] = {E: rounded(lad[E]) for E in Es}
     log_steps(axes[1], "y")
     axes[1].set_ylabel(TMEMO + " / E (rounds)")
-    axes[1].set_title("Memorisation Rounds vs E")
+    axes[1].set_title("Memorisation rounds vs E")
     # (c) the delay, four setups (C's is ~0 from E=25 and withheld)
     for s in "ABDE":
         lad = lads[s]
@@ -820,23 +870,22 @@ def fig2(rows):
     log_steps(axes[2], "y")
     axes[2].set_ylabel("delay (gradient steps)")
     axes[2].set_title("Delay vs E")
-    fig.legend(
-        handles=setup_handles("ABCDE")
-        + [
-            Line2D([], [], marker="*", color=COL["D"], ls="none", ms=9, label="Fixed point (Fig. 6)"),
-            CENS_HANDLE,
-        ],
-        loc="lower center",
-        ncol=4,
-        bbox_to_anchor=(0.5, -0.16),
-        fontsize=6.5,
-    )
     for ax in axes[1:]:
         cat_axis(ax, [str(E) for E in ES])
     for ax, L in zip(axes, "abc"):
         ax.set_xlabel("Local epochs (E)")
         letter(ax, L)
     fig.tight_layout()
+    fig.legend(
+        handles=setup_handles("ABCDE")
+        + [
+            Line2D([], [], marker="*", color=COL["D"], ls="none", ms=9, label="Fixed point (Fig. 6)"),
+            CENS_HANDLE,
+        ],
+        loc="upper center",
+        ncol=4,
+        bbox_to_anchor=(0.5, -0.1),
+    )
     NUMBERS["fig2"] = numbers
     save(fig, "fig2_local_work")
 
@@ -911,7 +960,7 @@ def _f_ladders(rows):
 
 
 def fig3(rows):
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.6), gridspec_kw=dict(wspace=0.55))
+    fig, axes = plt.subplots(1, 3, figsize=(5.5, 1.7), gridspec_kw=dict(wspace=0.5))
     numbers = {}
     for s, ls, tag, rounds in _f_ladders(rows):
         fs = sorted(rounds)
@@ -956,9 +1005,9 @@ def fig3(rows):
     for ax, t in zip(
         axes,
         [
-            "First Crossing vs f",
-            "Client Divergence vs f",
-            "Final Test Accuracy vs f",
+            "First crossing vs f",
+            "Client divergence vs f",
+            "Final test accuracy vs f",
         ],
     ):
         ax.set_title(t)
@@ -968,20 +1017,19 @@ def fig3(rows):
     log_steps(axes[0], "y")
     axes[0].set_ylabel(TFC + " (rounds)")
     axes[1].set_yscale("log")
-    axes[1].set_ylabel("Client divergence (mean before crossing)")
+    axes[1].set_ylabel("Client divergence / round")
     axes[2].set_ylim(60, 102)
     axes[2].set_ylabel("Test accuracy (%)")
-    fig.legend(
-        handles=setup_handles("ABCDE")
-        + [Line2D([], [], color=COL["A"], ls="--", marker="o", label="A, K=50")],
-        loc="lower center",
-        ncol=3,
-        bbox_to_anchor=(0.5, -0.2),
-        fontsize=6.5,
-    )
     for ax, L in zip(axes, "abc"):
         letter(ax, L)
     fig.tight_layout()
+    fig.legend(
+        handles=setup_handles("ABCDE")
+        + [Line2D([], [], color=COL["A"], ls="--", marker="o", label="A, K=50")],
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, -0.1),
+    )
     NUMBERS["fig3"] = numbers
     save(fig, "fig3_participation")
 
@@ -991,21 +1039,23 @@ def fig3(rows):
 COHERENT = {"A": "operand", "A'": "operand", "B": "operand", "C": "coset", "D": "coset"}
 DIRX = [0.01, 0.1, 0.5, 1, 10, 1000]
 DIRL = ["0.01", "0.1", "0.5", "1", "10", "1000"]
+DIRX5 = [0.01, 0.1, 1, 10, 1000]  # the 0.5 rung is drawn but not labelled
+DIRL5 = ["0.01", "0.1", "1", "10", "1000"]
 OFF4 = {"B": 0.02, "C": -0.02, "D": -0.05, "E": 0.05}  # vertical offsets, panel (b)
-DIRLAB = r"Dirichlet $\alpha_{\mathrm{dir}}$ (non-IID ← → IID)"
+DIRLAB = r"Dirichlet $\alpha_{\mathrm{dir}}$ (non-IID $\rightarrow$ IID)"
 
 
 def fig4(rows):
-    fig = plt.figure(figsize=(7.2, 5.8))
+    fig = plt.figure(figsize=(5.5, 4.0))
     gs = fig.add_gridspec(
         2,
         3,
-        height_ratios=[1, 1.05],
+        height_ratios=[0.85, 1],
         width_ratios=[1, 1, 1.25],
         hspace=0.8,
-        wspace=0.75,
+        wspace=0.7,
         top=0.95,
-        bottom=0.16,
+        bottom=0.14,
         left=0.1,
         right=0.98,
     )
@@ -1046,10 +1096,10 @@ def fig4(rows):
             if not _finite(st["fc"]):
                 censored_x(axa, d, col)
         numbers["anchor"][lab] = {d: rounded(st) for d, st in zip(das, sts)}
-    logx_ticks(axa, DIRX, DIRL)
-    axa.set_ylim(0, 80)
+    logx_ticks(axa, DIRX5, DIRL5)
+    axa.set_ylim(0, 100)
     axa.set_ylabel(TFC + " (gradient steps ×1000)")
-    axa.set_title("Heterogeneity (A)")
+    axa.set_title("Heterogeneity (setup A)")
     axa.legend(
         loc="upper right",
         fontsize=6,
@@ -1061,7 +1111,6 @@ def fig4(rows):
             Line2D(
                 [], [], color=ALPHA_COL[0.25], marker="^", ls=":", label="K=50, α=0.25"
             ),
-            CENS_HANDLE,
         ],
     )
     # (b) the other setups at K=10: fraction crossed, fill = memorised
@@ -1102,29 +1151,15 @@ def fig4(rows):
             }
             for d in das
         }
-    logx_ticks(axb, DIRX, DIRL)
+    logx_ticks(axb, DIRX5, DIRL5)
     axb.set_ylim(-0.1, 1.12)
     axb.set_yticks([0, 0.5, 1.0])
     axb.set_ylabel("Fraction of runs that crossed")
-    axb.set_title("Fraction Crossed (K=10)")
+    axb.set_title("Fraction crossed, K=10")
     axb.legend(
-        loc="center right",
-        fontsize=6,
-        handles=[Line2D([], [], color=COL[s], marker="o", label=s) for s in "BCDE"]
-        + [
-            Line2D([], [], marker="o", color=INK2, ls="none", ms=5, label="memorised"),
-            Line2D(
-                [],
-                [],
-                marker="o",
-                color=INK2,
-                mfc="white",
-                ls="none",
-                ms=5,
-                mew=1.2,
-                label="never memorised",
-            ),
-        ],
+        loc="lower right",
+        ncol=2,
+        handles=[Line2D([], [], color=COL[s], marker="o", label=s) for s in "BCDE"],
     )
     for ax in (axa, axb):
         ax.set_xlabel(DIRLAB)
@@ -1193,7 +1228,7 @@ def fig4(rows):
     axc.set_yticklabels([lab for _, lab in ykeys], fontsize=5.8)
     log_steps(axc, "x")
     axc.set_xlabel(TFC + " (gradient steps)")
-    axc.set_title("Starvation Control (A)")
+    axc.set_title("Starvation control (setup A)")
     axc.invert_yaxis()
     axc.legend(
         handles=[
@@ -1223,10 +1258,9 @@ def fig4(rows):
                 label="Failed to grok (100k budget)",
             ),
         ],
-        loc="upper left",
-        bbox_to_anchor=(-0.5, -0.3),
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.3),
         ncol=1,
-        fontsize=6,
     )
     # (d) partition structure against matched iid baselines
     groups, x, seps, last = [], 0, [], None
@@ -1313,13 +1347,14 @@ def fig4(rows):
                     )
                     axd.text(
                         xi,
-                        YTOP * 1.08,
+                        YTOP * 0.45,
                         frac_txt,
                         ha="center",
-                        va="bottom",
+                        va="center",
+                        rotation=90,
                         fontsize=5.5,
-                        color=PART[p],
-                        clip_on=False,
+                        color=INK2,
+                        bbox=dict(facecolor="white", edgecolor="none", pad=0.8),
                         zorder=4,
                     )
                 numbers["structure"][f"{s} K={int(K)} {p}"] = {
@@ -1339,14 +1374,14 @@ def fig4(rows):
         axd.axvline(sx, color="#bbbbbb", lw=0.7, zorder=1)
     axd.axhline(1.0, color=INK2, lw=0.9, ls="--", zorder=2)
     axd.set_xticks([g for g, _ in groups])
-    axd.set_xticklabels([l for _, l in groups], fontsize=6.5)
+    axd.set_xticklabels([l for _, l in groups], fontsize=6)
     axd.set_xlim(-0.6, x - 0.4)
     axd.set_yscale("log")
     axd.set_ylim(0.3, YTOP)
     axd.set_yticks([0.5, 1, 2, 5, 10])
     axd.set_yticklabels(["0.5×", "1×", "2×", "5×", "10×"])
     axd.set_ylabel(TFC + " / matched IID")
-    axd.set_title("Partition Structure vs Matched IID Baseline")
+    axd.set_title("Partition structure vs matched IID baseline")
     axd.legend(
         handles=[
             Patch(color=PART[p], label=lab)
@@ -1366,7 +1401,6 @@ def fig4(rows):
         ncol=3,
         loc="upper center",
         bbox_to_anchor=(0.5, -0.3),
-        fontsize=6.5,
     )
     for ax, L in zip((axa, axb, axc, axd), "abcd"):
         letter(ax, L)
@@ -1391,13 +1425,13 @@ AXIS_KIND = {
     "partitions": "Partition",
 }
 KIND_COL = {
-    "Sampling (free)": "#2ca02c",
-    "Shard sizes (free)": "#9467bd",
-    "Label conflict": "#d62728",
-    "Clients K": "#1f77b4",
-    "K / partition": "#1f77b4",
-    "Local epochs E": "#ff7f0e",
-    "Partition": "#e377c2",
+    "Sampling (free)": OI["green"],
+    "Shard sizes (free)": OI["purple"],
+    "Label conflict": OI["vermillion"],
+    "Clients K": OI["blue"],
+    "K / partition": OI["blue"],
+    "Local epochs E": OI["orange"],
+    "Partition": "#a6a6a6",
 }
 CELLS5 = [
     ("H1", 0.25, 25.0, "iid"),
@@ -1421,15 +1455,15 @@ def _cell_title(name, alpha, E, part):
 
 
 def fig5(rows):
-    fig = plt.figure(figsize=(7.2, 5.3))
+    fig = plt.figure(figsize=(5.5, 3.9))
     gs = fig.add_gridspec(
         2,
         3,
-        height_ratios=[1.15, 1],
-        hspace=0.5,
-        wspace=0.32,
+        height_ratios=[1.1, 1],
+        hspace=0.9,
+        wspace=0.35,
         top=0.95,
-        bottom=0.14,
+        bottom=0.13,
         left=0.1,
         right=0.98,
     )
@@ -1484,6 +1518,8 @@ def fig5(rows):
             )
         numbers["scatter_n"] += len(ps)
     for strat, mk in (("scaffold", "D"), ("fedprox", "X")):
+        if strat in WITHHOLD:
+            continue
         rs = sel(rows, group="algorithms", strategy=strat, setup="A")
         for r in rs:
             d = _divergence(r)
@@ -1513,7 +1549,10 @@ def fig5(rows):
                     clip_on=False,
                     zorder=5,
                 )
-    axa.plot([], [], marker="D", color=STRAT["scaffold"], ls="none", label="SCAFFOLD")
+    if "scaffold" not in WITHHOLD:
+        axa.plot(
+            [], [], marker="D", color=STRAT["scaffold"], ls="none", label="SCAFFOLD"
+        )
     axa.plot(
         [],
         [],
@@ -1539,13 +1578,13 @@ def fig5(rows):
     log_steps(axa, "y")
     axa.set_xlabel("Mean client divergence per round (before first crossing)")
     axa.set_ylabel("delay (gradient steps)")
-    axa.set_title("Delay vs Client Divergence (setup A, FedAvg, every design axis)")
-    axa.legend(ncol=2, fontsize=6.3, loc="lower left", title="Design axis")
+    axa.set_title("Delay vs client divergence (setup A, FedAvg, every design axis)")
+    axa.legend(ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.26))
     # (b-d) the draft's Fig. 8 form: trajectories per hard cell, every method overlaid
     for ax, (name, alpha, E, part) in zip(axb, CELLS5):
         rs = sel(rows, group="algorithms", alpha=alpha, local_epochs=E, partition=part)
         cells = by_cell(rs, "strategy")
-        for strat in ORDER5:
+        for strat in order5():
             runs = cells.get(strat, [])
             if not runs:
                 continue
@@ -1572,15 +1611,16 @@ def fig5(rows):
         ax.axhline(95, color=MUTED, lw=0.8, ls=(0, (3, 3)))
         log_steps(ax, "x")
         ax.set_ylim(-3, 103)
-        ax.set_title(_cell_title(name, alpha, E, part), fontsize=7.5)
+        ax.set_title(_cell_title(name, alpha, E, part))
         ax.set_xlabel("Gradient steps")
     axb[0].set_ylabel("Test accuracy (%)")
     fig.legend(
-        handles=[Line2D([], [], color=STRAT[k], lw=1.5, label=LAB5[k]) for k in ORDER5],
+        handles=[
+            Line2D([], [], color=STRAT[k], lw=1.3, label=LAB5[k]) for k in order5()
+        ],
         loc="lower center",
-        ncol=6,
+        ncol=len(order5()),
         bbox_to_anchor=(0.5, 0.0),
-        fontsize=6.5,
     )
     for ax, L in zip([axa] + axb, "abcd"):
         letter(ax, L)
@@ -1605,9 +1645,9 @@ def _traj(ax, rs, xkey, key, color, xscale=1.0, lw=1.1, alpha=0.9, label=None):
 def _stationarity(ax, rs, ref_step, xscale):
     """Median over runs of each quantity divided by its value at the reference step."""
     specs = (
-        ("train_loss", "#9467bd", "-", "Train loss"),
-        ("weight_norm_total", "#2ca02c", "--", "Weight norm"),
-        ("mean_client_drift", "#ff7f0e", ":", "Client drift / round"),
+        ("train_loss", OI["blue"], "-", "Train loss"),
+        ("weight_norm_total", OI["green"], "--", "Weight norm"),
+        ("mean_client_drift", OI["orange"], ":", "Client drift / round"),
     )
     out = {}
     for key, col, ls, lab in specs:
@@ -1642,9 +1682,9 @@ def fig6(rows):
     fig, axes = plt.subplots(
         2,
         2,
-        figsize=(6.8, 4.4),
+        figsize=(5.5, 3.2),
         sharex="col",
-        gridspec_kw=dict(hspace=0.35, wspace=0.3),
+        gridspec_kw=dict(hspace=0.45, wspace=0.3),
     )
     left = sel(rows, group="e50_long", setup="D")
     right = sel(rows, group="dirichlet_setups", setup="D", dirichlet_alpha=1.0)
@@ -1683,19 +1723,19 @@ def fig6(rows):
     for j in range(2):
         axes[0, j].axhline(85, color=MUTED, lw=0.8, ls=(0, (3, 3)))
         axes[0, j].set_ylim(0, 102)
-        axes[0, j].legend(fontsize=6.3, loc="lower right")
+        axes[0, j].legend(loc="lower right")
     axes[0, 0].axvline(0.25, color=INK2, lw=0.7)
     axes[0, 0].annotate(
         "original 250k budget",
         (0.25, 55),
         xytext=(4, 0),
         textcoords="offset points",
-        fontsize=6.3,
+        fontsize=6,
         color=INK2,
     )
     axes[0, 0].set_ylabel("Test accuracy (%)")
-    axes[0, 0].set_title("Test Accuracy, E=50 (2M steps)")
-    axes[0, 1].set_title("Test Accuracy, Dirichlet 1.0")
+    axes[0, 0].set_title("Test accuracy, E=50, 2M steps")
+    axes[0, 1].set_title("Test accuracy, Dirichlet 1.0")
     stat_l = _stationarity(axes[1, 0], left, 250_000, 1e6)
     stat_r = _stationarity(axes[1, 1], right, 100_000, 1e3)
     axes[1, 0].set_title("Normalised at 250k steps")
@@ -1703,7 +1743,7 @@ def fig6(rows):
     axes[1, 0].set_ylabel("Value / value at reference")
     axes[1, 0].set_xlabel("Gradient steps (millions)")
     axes[1, 1].set_xlabel("Gradient steps (thousands)")
-    axes[1, 0].legend(fontsize=6.3, loc="upper left", ncol=1)
+    axes[1, 0].legend(loc="upper left", ncol=1)
     for ax, L in zip(axes.ravel(), "abcd"):
         letter(ax, L)
     num = {"stationarity_left": stat_l, "stationarity_right": stat_r}
@@ -1742,14 +1782,14 @@ def _band(ax, curves, color, label, lw=1.8):
 
 
 def fig7(rows):
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.6), gridspec_kw=dict(wspace=0.45))
+    fig, axes = plt.subplots(1, 3, figsize=(5.5, 1.7), gridspec_kw=dict(wspace=0.5))
     b97 = sel(rows, group="boundary", num_clients=97.0)
     arms = by_cell(b97, "partition")
     numbers = {"ipr": {}, "earliest_cross_round": None}
     earliest = math.inf
     for part, col, lab in (
         ("iid", "#7f7f7f", "IID"),
-        ("operand", "#1f77b4", "Operand"),
+        ("operand", OI["blue"], "Operand"),
     ):
         curves = []
         for r in arms.get(part, []):
@@ -1760,9 +1800,7 @@ def fig7(rows):
             if _finite(r["t_first_cross"]):
                 earliest = min(earliest, r["t_first_cross"] / 5.0)
         if curves:
-            grid, med = _band(
-                axes[0], curves, col, f"{lab} (median, range of {len(curves)})"
-            )
+            grid, med = _band(axes[0], curves, col, f"{lab} ({len(curves)} runs)")
             numbers["ipr"][part] = {
                 int(x): round(float(y), 4)
                 for x, y in zip(grid, med)
@@ -1773,18 +1811,18 @@ def fig7(rows):
         for ax in axes[:2]:
             ax.axvline(earliest, color=INK2, lw=0.7, ls="--")
         axes[0].annotate(
-            "earliest first\ncrossing in the cell",
+            "earliest\ncrossing",
             (earliest, 0.03),
             xycoords=("data", "axes fraction"),
             va="bottom",
             xytext=(4, 0),
             textcoords="offset points",
             ha="left",
-            fontsize=6.3,
+            fontsize=6,
             color=INK2,
         )
-    axes[0].set_title("Global IPR (K=97, α=0.25)")
-    axes[0].legend(fontsize=6.3, loc="upper left")
+    axes[0].set_title("Global IPR, K=97, α=0.25")
+    axes[0].legend(loc="upper left")
     axes[0].set_xlabel("Round")
     axes[0].set_ylabel("IPR (Fourier concentration)")
     groups = {True: [], False: []}
@@ -1796,14 +1834,14 @@ def fig7(rows):
             )
     for ok, col, lab in (
         (False, "#7f7f7f", "Never crossed"),
-        (True, "#1f77b4", "Crossed later"),
+        (True, OI["blue"], "Crossed later"),
     ):
         if groups[ok]:
             _band(axes[1], groups[ok], col, f"{lab} ({len(groups[ok])})", lw=1.5)
-    axes[1].set_title("IID Runs by Outcome")
+    axes[1].set_title("IID runs by outcome")
     axes[1].set_xlabel("Round")
-    axes[1].set_ylabel("IPR (Fourier concentration)")
-    axes[1].legend(fontsize=6.3, loc="upper left")
+    axes[1].set_ylabel("IPR")
+    axes[1].legend(loc="upper left")
     for ax in axes[:2]:
         ax.xaxis.set_major_locator(FixedLocator([0, 5000, 10000, 15000, 20000]))
         ax.xaxis.set_major_formatter(FuncFormatter(_human))
@@ -1817,10 +1855,10 @@ def fig7(rows):
         axes[2].plot(
             ep[m],
             np.asarray(h["circ_acc_interaction"])[m],
-            color="#9467bd",
+            color=OI["purple"],
             lw=1.0,
             alpha=0.85,
-            label="Compositional circuit T alone" if k == 0 else None,
+            label="Circuit $T$ alone" if k == 0 else None,
         )
         axes[2].plot(
             ep[m],
@@ -1828,7 +1866,7 @@ def fig7(rows):
             color=COL["D"],
             lw=1.0,
             alpha=0.85,
-            label="Full model, test" if k == 0 else None,
+            label="Full model" if k == 0 else None,
         )
     for x, lab, ha, dx in ((1800, "plateau", "right", -3), (3600, "dip", "left", 3)):
         axes[2].axvline(x, color=INK2, lw=0.7, ls="--")
@@ -1838,14 +1876,14 @@ def fig7(rows):
             xytext=(dx, -8),
             ha=ha,
             textcoords="offset points",
-            fontsize=6.3,
+            fontsize=6,
             color=INK2,
         )
     log_steps(axes[2], "x")
     axes[2].set_xlabel("Epoch")
     axes[2].set_ylabel("Accuracy (%)")
-    axes[2].set_title("Circuit vs Full Model (D)")
-    axes[2].legend(fontsize=6.3, loc="lower right")
+    axes[2].set_title("Circuit vs full model (setup D)")
+    axes[2].legend(loc="center left", handlelength=1.2)
     for ax, L in zip(axes, "abc"):
         letter(ax, L)
     fig.tight_layout()
@@ -1856,14 +1894,24 @@ def fig7(rows):
 # ── Appendix A1: the two clocks on every setup ────────────────────────────────
 
 
+NAME2 = {
+    "A": "A: quad-MLP\nmod 97, GD",
+    "B": "B: transformer\nmod 113",
+    "C": "C: transformer\n$S_5$ (withheld)",
+    "D": "D: quad-MLP\n$S_5$",
+    "E": "E: MLP\nMNIST",
+}
+
+
 def figA1(rows):
     setups = ["A", "B", "C", "D", "E"]
-    fig, axes = plt.subplots(2, 5, figsize=(7.4, 3.8), sharex=False)
+    fig, axes = plt.subplots(2, 5, figsize=(5.5, 2.7), sharex=False)
     numbers = {}
     for j, s in enumerate(setups):
         rs = [r for r in fed(rows, s) if r["group"] in SRC1]
         ser = by_cell(rs, "alpha", "weight_decay", "n_train")
         primary = sorted(ser, key=lambda kv: (-kv[0], kv[1]))[0][:2] if ser else None
+        tags = []
         for (alpha, wd, ntr), runs in sorted(
             ser.items(), key=lambda kv: (-kv[0][0], kv[0][1])
         ):
@@ -1898,6 +1946,7 @@ def figA1(rows):
                 else f"n={ntr:g}"
             )
             ls = "-" if (len(ser) == 1 or (alpha, wd) == primary) else "--"
+            tags.append((ls, tag))
             al = WITHHELD if s == "C" else 1.0
             xs = [kx(K) for K in Kk]
             fr = [st["held"] for st in sts]
@@ -1976,13 +2025,14 @@ def figA1(rows):
             cat_axis(ax, ["cent", "2", "5", "10", "20", "50", "97"])
             ax.tick_params(labelsize=5.5)
             log_steps(ax, "y", *((100, 4e5) if i == 0 else (200, 4e5)))
-            ax.legend(fontsize=5, loc="upper left" if i == 0 else "lower right")
-        axes[0, j].set_title(
-            NAME[s] + (" (withheld)" if s == "C" else ""), color=COL[s], fontsize=6.5
+        sub = "\n".join(
+            ("solid: " if ls == "-" else "dashed: ") + t for ls, t in tags
         )
-        axes[1, j].set_xlabel("K (number of clients)")
+        axes[0, j].set_title(NAME2[s] + "\n" + sub, fontsize=5.5)
+        axes[1, j].set_xlabel("K (clients)")
     axes[0, 0].set_ylabel(TMEMO + " (gradient steps)")
     axes[1, 0].set_ylabel("delay (gradient steps)")
+    fig.tight_layout()
     fig.legend(
         handles=[
             Line2D([], [], color=INK2, lw=1.5, label="setup's working point"),
@@ -1994,14 +2044,15 @@ def figA1(rows):
                 ls="--",
                 label="second series (another α or decay)",
             ),
+            Line2D(
+                [], [], marker="s", color=COL["A"], ls="none", label="A: operand, K=97"
+            ),
             CENS_HANDLE,
         ],
-        loc="lower center",
-        ncol=3,
-        bbox_to_anchor=(0.5, -0.06),
-        fontsize=6.5,
+        loc="upper center",
+        ncol=4,
+        bbox_to_anchor=(0.5, -0.01),
     )
-    fig.tight_layout()
     NUMBERS["figA1"] = numbers
     save(fig, "figA1_two_clocks_all_setups")
 
@@ -2010,12 +2061,12 @@ def figA1(rows):
 
 
 def figA2(rows):
-    fig, axb = plt.subplots(1, 3, figsize=(7.2, 2.5), gridspec_kw=dict(wspace=0.35))
+    fig, axb = plt.subplots(1, 3, figsize=(5.5, 1.7), gridspec_kw=dict(wspace=0.35))
     numbers = {}
     for ax, (name, alpha, E, part) in zip(axb, CELLS5):
         rs = sel(rows, group="algorithms", alpha=alpha, local_epochs=E, partition=part)
         cells = by_cell(rs, "strategy")
-        for i, strat in enumerate(ORDER5):
+        for i, strat in enumerate(order5()):
             runs = cells.get(strat, [])
             if not runs:
                 continue
@@ -2051,11 +2102,11 @@ def figA2(rows):
                 "held": st["held"],
                 "n": st["n"],
             }
-        ax.set_yticks(range(len(ORDER5)))
-        ax.set_yticklabels([LAB5[s] for s in ORDER5] if ax is axb[0] else [])
+        ax.set_yticks(range(len(order5())))
+        ax.set_yticklabels([LAB5[s] for s in order5()] if ax is axb[0] else [])
         ax.invert_yaxis()
         log_steps(ax, "x", dense=False)
-        ax.set_title(_cell_title(name, alpha, E, part), fontsize=7.5)
+        ax.set_title(_cell_title(name, alpha, E, part))
     axb[1].set_xlabel(TFC + " (gradient steps; bar = KM median, × = failed to grok)")
     for ax, L in zip(axb, "abc"):
         letter(ax, L)
@@ -2080,7 +2131,14 @@ FIGS = {
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", nargs="*", default=None)
+    ap.add_argument(
+        "--include-withheld",
+        action="store_true",
+        help="draw the withheld SCAFFOLD runs (see WITHHOLD)",
+    )
     args = ap.parse_args()
+    if args.include_withheld:
+        WITHHOLD.clear()
     rows = load_rows()
     for n, fn in FIGS.items():
         if args.only and n not in args.only:

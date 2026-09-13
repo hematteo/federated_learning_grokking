@@ -13,6 +13,69 @@ Ground truth for what is already banked: `results/data/runs_v2.csv` and
 
 ## To run
 
+### 0. The 2026-09-09 chain on cam-gpu-acs — `scripts/run_algo_chain.sh`
+
+Seven manifests, 387 runs, sequential on GPUs 1–2 at four runs each. Plan and
+decision rules: `plans/exp5-algorithms-across-setups.md`.
+
+| order | manifest | runs | what | slot-h (measured walls) |
+|---|---|---|---|---|
+| 1 | `t6_algo_calibration` | 201 | Phase 1: FedAdam/FedYogi/FedAvgM/FedProx ladders + SCAFFOLD Option I on A, B, D, E at K=10, E=5, iid | ~110 |
+| 2 | `x_b_wd_zero_fl` | 21 | entry 1 at α=0.70 with the matched wd ladder (0, 0.1, 1.0) × K ∈ {10, 20} | ~13 |
+| 3 | `x_h2_mechanism` | 38 | Phase 4: H2 with checkpoints under FedAvg / SCAFFOLD / FedProx μ ∈ {0.01, 0.001} / FedAdam, and damped FedAvg lr × {0.5, 0.2, 0.1} at 1/factor budget | ~55 |
+| 3b | `x_scaffold_rerun` | 10 | H1 and H3 SCAFFOLD, 5 seeds, with the fixed server-side `c_i` (replaces §17.1's column with item 3's H2) | ~7 |
+| 4 | `t6_algo_calibration_c` | 51 | Phase 1 on C — withheld under §23 until the determinism fix is shown to hold there | ~140 |
+| 5 | `x_b_decay_band_long` | 6 | B centralized wd=0.03 → 200k and wd=0.01 → 600k epochs, the censored rungs of §13.5 | ~31 |
+| 6 | `t2_aggregation_alpha2` | 60 | exp2's second α, the outstanding cells | ~75 |
+
+**Phase 2 is written and grows as calibration lands.** `t6_algo_comparison`
+emits only the setups present in `build_manifests.CALIBRATED`, so adding a
+setup adds ids and never orphans any. **B is filled in (2026-09-11): 66 specs,
+63 to run, ~163 slot-h by measured walls** (the builder's model says 238; it
+over-costs). Its FedAvg rescue arm dedups to the three banked `t3a` runs.
+
+B's selected rungs, from 48/51 of its calibration block (SCAFFOLD Option I was
+still in flight). FedAvg on cell W crosses at 55,900:
+
+| method | rung | grokked | `t_first_cross` | vs FedAvg |
+|---|---|---|---|---|
+| FedYogi | server_lr 0.03 | 3/3 | 2,000 | 28× |
+| FedAdam | server_lr 0.03 | 3/3 | 2,100 | 27× |
+| FedAvgM | server_lr 1.0, mom 0.9 | 3/3 | 3,400 | 16× |
+| FedProx | mu 0.01 (best partial) | **1/3** | 102,200 | 0.55× |
+
+**The adaptive band is narrower on B than on A and sits 3× lower.** The anchor
+calibrates to server_lr 0.1; on B, 0.1 is 0/3 and destroys *memorisation*
+(FedAdam `t_memo` 300 → 157,400; FedYogi → 39,550). The 0.03 rung, added to
+bracket the anchor's optimum from below, is the selected value on both adaptive
+methods — the anchor's ladder alone would have selected 0.01 and understated
+the advantage ~4×. **§17.1's anchor-only calibration does not transfer, and
+that is now measured.**
+
+**FedProx loses on B at every mu**, so §17.1's "worse than doing nothing"
+survives being asked with a calibrated ladder, on a second setup. One oddity
+for Phase 2 to resolve at n=5: mu=1e-4 should behave almost exactly like
+FedAvg and is instead the worst rung (0/3, 32.8% final test, `t_memo` 1,400
+so it memorises fine). The ladder is non-monotonic, which on B's known bimodal
+seed variance at n=3 is the likelier reading.
+
+> **One design fork, decided in the builder.** B's calibration cell runs
+> wd=0.1 (its K-ladder working point) and B's rescue cell runs wd=1.0 (its
+> `t3a` working point). The calibration never crossed that 10× decay change,
+> and B's usable adaptive band is one rung wide. So an adaptive method that
+> fails to rescue could not be told from one whose server LR fell off the
+> cliff. The rescue cell therefore carries the selected rung at 5 seeds **and
+> the rung below it at 3** (`HEDGE_BELOW`), for FedAdam and FedYogi only.
+> The alternative — re-running the rescue cell's FedAvg control at wd=0.1 —
+> costs a new control and abandons the banked §20 cell, which is worse.
+
+**Everything in this chain runs with `aggregation_order="cid"`** (the new
+default) and any SCAFFOLD on an AdamW setup with `scaffold_option=1`. Both are
+config fields, so both are in the run-id hash only when a spec states them;
+the specs here leave `aggregation_order` unstated, so a bare FedAvg control
+still dedups against its banked (arrival-ordered) run. A C cell that must be
+re-measured fresh states it explicitly.
+
 ### 1. Setup B at wd=0, federated — is the memorisation collapse about DECAY or about ADAMW?
 
 > **SUPERSEDED IN ONE FIELD by entry 2 (2026-08-23): move α from 0.30 to 0.70.**
@@ -501,7 +564,47 @@ config+seed at 200k had reached only 67% train at the step where the 1M run
 reports `t_memo`. Trajectories are not reproducible on C — RESULTS §23 — so
 "under-budgeted" and "unstable" cannot be separated with n=3. Not to be quoted.
 
-## Reproducibility — the harness is not run-to-run deterministic
+## SCAFFOLD's client state was read from the wrong process — the 15 banked runs are suspect
+
+Found 2026-09-09 while making the harness deterministic. `c_i` lived in a
+module-level dict inside the Ray actor that ran the client, keyed by partition.
+Flower's simulation does not pin a partition to an actor: `BasicActorPool`
+hands every message to whichever actor is idle (`pool.pop()`), so from round 2
+a partition was served by an actor holding no `c_i` for it (zeros) or a stale
+one from an earlier round. The correction `g − c_i + c` was therefore wrong on
+most client-rounds, in a pattern set by Ray's scheduling, and no two SCAFFOLD
+runs could agree. Same defect, same mechanism, for `persist_local_opt_state`
+(`_optimizer_cache`): the 12 banked `adam_restart` runs did not persist Adam
+state across rounds except by chance. Neither affects FedAvg, FedProx or the
+server-side optimisers, which keep no client state.
+
+Fixed: every `c_i` now lives in `ScaffoldStrategy`, keyed by partition id, and
+is shipped to its client in `configure_fit`; the client reports
+`partition_id` in its fit metrics, which is also what aggregation sorts on.
+`persist_local_opt_state` is NOT fixed (it would need the Adam moments shipped
+through the fit config) and should not be used until it is.
+
+**Consequence.** RESULTS §17.1's SCAFFOLD column (4,500 / 5,000 / 4,000, 3rd
+of six) and §17.4's "188× less divergence, 12× faster" were measured with a
+partially-applied correction. Direction unknown: with `c_i` mostly zero the
+correction degenerates toward `g + c`, which is a different algorithm, not a
+noisier SCAFFOLD. The H2 cell is re-run in `x_h2_mechanism` (chain item 3) at
+5 seeds with the fixed state; H1 and H3 are 10 runs more and should follow
+once that reading is in. Until then §17.1/§17.4's SCAFFOLD numbers are
+withheld.
+
+## Reproducibility — the harness is not run-to-run deterministic. **FIXED 2026-09-09**
+
+Steps (1)–(3) below are done: every strategy aggregates in partition-id order
+(`FedConfig.aggregation_order`, default `"cid"`; `"arrival"` is the old
+behaviour — note a Flower cid is a *random* node id per run, so the sort key is
+the partition id the client reports, not the cid), `torch.use_deterministic_algorithms(True, warn_only=True)` runs in
+the driver, every client actor and the centralized loop, the cuBLAS workspace
+is pinned in `fedgrok/__init__.py`, and `tests/test_determinism.py` asserts two
+runs of one spec give identical histories and weights. (4) is decided by the
+C block of the chain above: if C's duplicate cells now agree, C goes to n=5
+in Phase 2; if not, C is stated qualitatively. (5) is a paper edit.
+
 
 Found by the six duplicate cells above. Same config and seed, two runs: D differs by
 0.00 on every seed; C by 12.7 / 0.0 / 7.7 points of peak train accuracy, against a

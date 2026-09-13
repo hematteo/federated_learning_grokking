@@ -1,0 +1,194 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\usepackage[font=small]{caption}
+\usepackage{xcolor}
+\usepackage{enumitem}
+
+\setlist[itemize]{topsep=2pt,itemsep=1pt,parsep=0pt}
+
+\title{Grokking Under Federated Averaging:\\Robustness and Failure Modes}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+\section{Setup}
+
+\begin{itemize}
+  \item \textbf{Task}: modular addition $(a+b) \bmod 97$, training fraction $\alpha{=}0.5$
+  \item \textbf{Model}: GrokNet --- 2-layer MLP, no biases, quadratic activation, mean-field init, $N{=}128$, MSE loss
+  \item \textbf{Centralised baseline}: full-batch GD, $\mathrm{lr}{=}50$, $\mathrm{wd}{=}0$
+  \item \textbf{Federated}: Flower simulation, $K$ clients, 2000 rounds, 5 local epochs (defaults)
+  \item \textbf{Partition schemes}: IID, operand-based ($a \bmod K = k$), target-based ($(a{+}b) \bmod K = k$)
+\end{itemize}
+
+\section{Experiment 1: Federated vs.\ Centralised Baseline}
+
+\begin{itemize}
+  \item FedAvg (IID, $K{=}5$, full participation) reproduces the centralised grokking trajectory step-for-step (Figure~\ref{fig:fed-vs-central})
+  \item Both reach 100\% test accuracy at ${\sim}8200$ gradient steps with identical IPR dynamics ($0.02 \to 0.34$)
+  \item All three partition strategies (IID, operand, target) produce indistinguishable curves at $K{=}5$
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{../results/federated/fed_vs_central_iid_K5.png}
+\caption{Federated (IID, $K{=}5$) vs.\ centralised training. Trajectories are effectively identical.}
+\label{fig:fed-vs-central}
+\end{figure}
+
+\section{Experiment 2: Stress-Testing Federated Grokking}
+
+Three axes probed to find where federated grokking breaks.
+
+\subsection{Client Scaling (IID, full participation)}
+
+\begin{table}[h]
+\centering
+\caption{Client scaling. All configurations grok to 100\%.}
+\label{tab:clients}
+\begin{tabular}{rrrrr}
+\toprule
+$K$ & Samples/client & Grok step & Final test acc & Final IPR \\
+\midrule
+5   & 940 & 8215 & 100.0\% & 0.342 \\
+10  & 470 & 8220 & 100.0\% & 0.342 \\
+20  & 235 & 8240 & 100.0\% & 0.340 \\
+50  & 94  & 8280 & 100.0\% & 0.332 \\
+97  & 48  & 8430 & 100.0\% & 0.311 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item $K{=}97$ (48 samples/client) still groks to 100\%
+  \item Grok step increases only 2.6\% from $K{=}5$ to $K{=}97$
+  \item Grokking is immune to client count under IID
+\end{itemize}
+
+\subsection{Partial Participation (K=20, target partition)}
+
+\begin{table}[h]
+\centering
+\caption{Partial participation under non-IID target partition ($K{=}20$).}
+\label{tab:participation}
+\begin{tabular}{rrrrrr}
+\toprule
+Fraction & Clients/round & Grok step & Final test acc & Final IPR \\
+\midrule
+1.0 & 20 & 9585  & 98.5\% & 0.214 \\
+0.8 & 16 & 9600  & 97.5\% & 0.218 \\
+0.6 & 12 & 9725  & 96.2\% & 0.220 \\
+0.4 & 8  & 9900  & 93.9\% & 0.222 \\
+0.2 & 4  & 9720  & 94.5\% & 0.242 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{Only axis that degrades grokking}
+  \item Non-IID target + low participation ($f_t{=}0.2$) caps accuracy at ${\sim}94\%$ vs.\ 100\% under IID
+  \item Cause: not all target residue classes represented each round $\Rightarrow$ systematic under-representation
+  \item Grokking still occurs --- accuracy jumps from ${\sim}1\%$ to ${\sim}94\%$ at roughly the same step
+\end{itemize}
+
+\subsection{Extreme Local Epochs (K=5, IID)}
+
+\begin{table}[h]
+\centering
+\caption{Extreme local epochs ($K{=}5$, IID, full participation).}
+\label{tab:local-epochs}
+\begin{tabular}{rrrrr}
+\toprule
+Local epochs & Rounds & Grok step & Final test acc & Final IPR \\
+\midrule
+50  & 400 & 8300  & 100.0\% & 0.457 \\
+100 & 200 & 8400  & 100.0\% & 0.446 \\
+200 & 100 & 9000  & 100.0\% & 0.426 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item $\mathrm{le}{=}200$ (only 100 communication rounds) still groks to 100\%
+  \item Higher local epochs produce \emph{higher} IPR ($0.46$ vs.\ $0.34$ at $\mathrm{le}{=}5$)
+  \item Extended local training strengthens periodic Fourier features rather than harming them
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{../results/federated/fed_breaking_point.png}
+\caption{Breaking point: $3{\times}3$ grid. Rows: client scaling, partial participation, extreme local epochs. Columns: test accuracy, IPR, train accuracy.}
+\label{fig:breaking}
+\end{figure}
+
+\section{Experiment 3: FedProx Sweep}
+
+\begin{itemize}
+  \item FedProx adds proximal term $\frac{\mu}{2}\|w - w^{\mathrm{global}}\|^2$ to each client's local objective
+  \item Sweep: $\mu \in \{0, 0.001, 0.01, 0.1, 1.0, 10.0\}$, $K{=}5$, IID, full participation
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{FedProx sweep. Sharp transition between $\mu{=}0.001$ (groks) and $\mu{=}0.01$ (fails).}
+\label{tab:fedprox}
+\begin{tabular}{rlrrrl}
+\toprule
+$\mu$ & Label & Final test acc & Grok step & $\|W_1\|_F$ & Status \\
+\midrule
+0     & FedAvg    & 100.0\% & 8215  & 23.80 & Groks \\
+0.001 & FedProx   &  99.7\% & 9075  & 22.39 & Groks (10\% delayed) \\
+0.01  & FedProx   &   0.1\% & ---   & 15.14 & Weight growth suppressed \\
+0.1   & FedProx   &   1.0\% & ---   & NaN   & Diverges \\
+1.0   & FedProx   &   1.0\% & ---   & NaN   & Explodes (round 2) \\
+10.0  & FedProx   &   1.0\% & ---   & NaN   & Explodes (round 1) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{Sharp phase transition} between $\mu{=}0.001$ and $\mu{=}0.01$
+  \item $\mu{=}0.001$: groks with 10\% delay (step 9075 vs.\ 8215), slightly lower weight norm (22.4 vs.\ 23.8)
+  \item $\mu{=}0.01$: weight norm capped at 15.1 (vs.\ 23.8), only 44\% train accuracy, no grokking
+  \item $\mu \ge 0.1$: proximal gradient $\mu(w - w^{\mathrm{global}})$ $\times$ large lr ($50$) $\Rightarrow$ immediate numerical divergence
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{../results/federated/fed_fedprox_sweep.png}
+\caption{FedProx sweep. Left: test accuracy. Centre/Right: IPR and weight norm ($\mu \le 0.01$ only; $\mu \ge 0.1$ diverges).}
+\label{fig:fedprox}
+\end{figure}
+
+\section{Discussion}
+
+\paragraph{Grokking is a property of the loss landscape, not the optimisation path.}
+\begin{itemize}
+  \item FedAvg's noisy, distributed optimisation does not prevent the phase transition
+  \item Tested: up to 97 clients, as few as 4 clients/round, up to 200 local epochs
+  \item The grokking mechanism (periodic Fourier mode learning via weight norm growth) depends on loss landscape geometry, which is preserved regardless of how gradient steps are distributed
+\end{itemize}
+
+\paragraph{The proximal term directly opposes grokking.}
+\begin{itemize}
+  \item Grokking requires weight norms to grow from ${\sim}11$ to ${\sim}24$ (``lazy'' $\to$ ``rich'' regime)
+  \item FedProx's $\frac{\mu}{2}\|w - w^{\mathrm{global}}\|^2$ acts as additional weight decay, anchoring parameters near the global model
+  \item Even $\mu{=}0.01$ suppresses growth below the critical threshold ($\|W_1\|_F \approx 15$ vs.\ $24$)
+  \item \textbf{Fundamental tension}: the regularisation that makes FedProx effective for heterogeneous FL (reducing client drift) directly conflicts with the weight norm growth that enables grokking
+\end{itemize}
+
+\paragraph{Partial participation is the only weak point.}
+\begin{itemize}
+  \item Only non-IID target partition + low participation ($f_t{=}0.2$, $K{=}20$) degrades accuracy (to ${\sim}94\%$)
+  \item Not a failure of grokking itself --- the sharp transition still occurs
+  \item Information-theoretic limitation: with 4 of 20 clients/round, some target residue classes are systematically under-represented
+\end{itemize}
+
+\end{document}

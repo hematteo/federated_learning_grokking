@@ -13,11 +13,22 @@ via the metrics channel rather than niid_bench's parameter-concatenation:
 
   - the server control variate c is shipped to clients as bytes in the fit
     config each round;
-  - each client keeps c_i in a module-level dict (like _client_cache), applies
-    the g - c_i + c correction during local steps, and returns its updated model
-    (aggregated normally by FedAvg) plus the control-variate delta Δc_i as bytes;
-  - ScaffoldStrategy (a thin FedAvg subclass) reads the Δc_i back and updates
-    c <- c + (|S|/N) * mean(Δc_i), then the on_fit_config closure ships the new c.
+  - each client receives its own c_i in the same fit config (`scaffold_ci`,
+    absent on its first round, when c_i = 0), applies the g - c_i + c
+    correction during local steps, and returns its updated model (aggregated
+    normally by FedAvg) plus the control-variate delta Δc_i as bytes;
+  - ScaffoldStrategy (a thin FedAvg subclass) keeps every c_i keyed by
+    PARTITION id, applies the Δc_i, and updates c <- c + (|S|/N) * mean(Δc_i);
+    the on_fit_config closure ships the new c and configure_fit attaches each
+    client's c_i.
+
+  c_i used to live in a module-level dict inside the Ray actor that ran the
+  client. Flower's simulation does not pin a partition to an actor -- the pool
+  hands each message to whichever actor is idle -- so from round 2 a partition
+  was routinely served by an actor holding no c_i for it (zeros) or a stale
+  one. That made the correction wrong and made every SCAFFOLD run
+  non-reproducible. The 15 banked anchor SCAFFOLD runs (t3_algorithm_comparison)
+  carry this; see RUNS_TODO. Server-side state is exact and deterministic.
 
 Control-variate update is SCAFFOLD's Option II:
     c_i^+ = c_i - c + (x - y_i) / (eta * K)
@@ -30,17 +41,8 @@ the round reduces exactly to FedAvg; the control variates only bite from round 2
 
 import numpy as np
 import torch
-from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+from flwr.common import FitIns
 from flwr.server.strategy import FedAvg
-
-
-# Per-client control variates c_i, keyed like _client_cache. Lives in each Ray
-# actor's process and persists across that client's rounds.
-_client_cv = {}
-
-
-def reset_client_cv():
-    _client_cv.clear()
 
 
 def _cv_bytes(cv_list):
@@ -61,17 +63,6 @@ def _cv_from_bytes(buf, shapes):
 
 def zeros_like_params(ndarrays):
     return [np.zeros_like(a) for a in ndarrays]
-
-
-def get_client_cv(key, template):
-    """Return this client's c_i (zeros on first sight)."""
-    if key not in _client_cv:
-        _client_cv[key] = zeros_like_params(template)
-    return _client_cv[key]
-
-
-def set_client_cv(key, cv):
-    _client_cv[key] = cv
 
 
 def apply_correction(model, server_cv, client_cv):
@@ -122,13 +113,66 @@ def client_cv_update(x_ndarrays, y_ndarrays, server_cv, client_cv, lr, n_steps):
     return new_cv, delta
 
 
-class ScaffoldStrategy(FedAvg):
-    """FedAvg model aggregation + server control-variate maintenance.
+def client_cv_update_option1(grad_mean, client_cv):
+    """Option I: c_i^+ = mean local gradient; Δc_i = c_i^+ - c_i.
+
+    `grad_mean` is the average of the RAW gradients (before the SCAFFOLD
+    correction is added) over the client's local steps this round. Under plain
+    GD at momentum 0 this equals Option II's (x - y_i)/(lr K) exactly, because
+    y_i = x - lr * sum(g_t - c_i + c) makes (x - y_i)/(lr K) = mean(g_t) - c_i + c
+    and Option II's c_i - c + that = mean(g_t). Under AdamW the two differ and
+    only this one is unbiased.
+    """
+    new_cv = [g.astype(np.float32, copy=True) for g in grad_mean]
+    delta = [n - ci for n, ci in zip(new_cv, client_cv)]
+    return new_cv, delta
+
+
+class _SortedResultsMixin:
+    """Aggregate client results in client-id order, not arrival order.
+
+    Flower's aggregate_inplace sums the results list front to back, and the
+    list is ordered by whichever Ray actor answered first. Ten float32 layers
+    summed in different orders differ by ~1.5 ulp per round; on setups near a
+    critical point that is enough to flip whether a seed memorises (RESULTS 23).
+    Sorting by cid makes the sum a pure function of the client updates. Applied
+    to every strategy through _build_strategy; FedConfig.aggregation_order
+    = "arrival" bypasses it.
+    """
+
+    sort_results = True
+
+    def aggregate_fit(self, server_round, results, failures):
+        if self.sort_results:
+            results = sorted(results, key=_result_key)
+        return super().aggregate_fit(server_round, results, failures)
+
+
+def _result_key(result):
+    """Sort by the PARTITION the client trained, not by Flower's cid.
+
+    In the simulation engine a cid is the node id, and node ids are drawn at
+    random per run -- so an order by cid is fixed within a run and different
+    between runs, which is exactly the run-to-run noise being removed. The
+    client reports its partition id in the fit metrics; a result without one
+    (a stub in a test) falls back to the cid, numerically where possible.
+    """
+    client, fit_res = result
+    pid = fit_res.metrics.get("partition_id") if fit_res.metrics else None
+    if pid is not None:
+        return (0, int(pid), "")
+    text = str(client.cid)
+    return (1, int(text), "") if text.isdigit() else (2, 0, text)
+
+
+class ScaffoldStrategy(_SortedResultsMixin, FedAvg):
+    """FedAvg model aggregation + server-side control-variate state.
 
     The model is aggregated exactly as FedAvg (clients return their corrected
-    local models). The control variate is updated from the Δc_i clients report
-    in their fit metrics: c <- c + (participating/total) * mean(Δc_i). The shared
-    `server_cv_box[0]` is read by the on_fit_config closure to ship c to clients.
+    local models). Every c_i lives here, keyed by partition id, and is shipped
+    to its client in configure_fit; the server variate c is updated from the
+    Δc_i clients report in their fit metrics, c <- c + (participating/total) *
+    mean(Δc_i), and read by the on_fit_config closure through `server_cv_box[0]`.
     """
 
     def __init__(self, *args, server_cv_box, num_total_clients, param_shapes, **kwargs):
@@ -136,17 +180,41 @@ class ScaffoldStrategy(FedAvg):
         self._cv_box = server_cv_box
         self._num_total = num_total_clients
         self._shapes = param_shapes
+        self._client_cv = {}          # partition id -> c_i
+        self._cid_to_partition = {}   # Flower cid (node id) -> partition id
+
+    def configure_fit(self, server_round, parameters, client_manager):
+        # FedAvg hands every client the SAME FitIns object; copy the config
+        # before attaching a per-client value.
+        out = []
+        for client, fit_ins in super().configure_fit(server_round, parameters, client_manager):
+            pid = self._cid_to_partition.get(client.cid)
+            if pid is not None and pid in self._client_cv:
+                fit_ins = FitIns(fit_ins.parameters,
+                                 {**fit_ins.config,
+                                  "scaffold_ci": _cv_bytes(self._client_cv[pid])})
+            out.append((client, fit_ins))
+        return out
 
     def aggregate_fit(self, server_round, results, failures):
+        if self.sort_results:
+            results = sorted(results, key=_result_key)
         # Standard FedAvg model aggregation first.
         aggregated_params, metrics = super().aggregate_fit(server_round, results, failures)
 
-        # Then update the server control variate from the reported Δc_i.
+        # Then apply each client's Δc_i to its stored c_i, and the mean to c.
         deltas = []
-        for _client, fit_res in results:
+        for client, fit_res in results:
             dc = fit_res.metrics.get("scaffold_dc")
-            if dc is not None:
-                deltas.append(_cv_from_bytes(dc, self._shapes))
+            pid = fit_res.metrics.get("partition_id")
+            if dc is None or pid is None:
+                continue
+            pid = int(pid)
+            self._cid_to_partition[client.cid] = pid
+            delta = _cv_from_bytes(dc, self._shapes)
+            prev = self._client_cv.get(pid) or zeros_like_params(delta)
+            self._client_cv[pid] = [c + d for c, d in zip(prev, delta)]
+            deltas.append(delta)
         if deltas:
             mean_dc = [np.mean([d[j] for d in deltas], axis=0)
                        for j in range(len(self._shapes))]

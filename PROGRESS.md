@@ -18,6 +18,37 @@ The build changelog that used to occupy the middle of this file — nine
 Per-sweep result tables that duplicated `RESULTS.md` have gone the same way; the
 section numbers in the table above are the citable ones.
 
+## Current state — 2026-09-09
+
+**1,685 runs banked. Chain of 387 runs launched on `cam-gpu-acs`** (GPUs 1–2,
+eight slots) — `scripts/run_algo_chain.sh`, RUNS_TODO entry 0, plan in
+`plans/exp5-algorithms-across-setups.md`. Phase 1 of the algorithm comparison
+on A/B/D/E, the B wd=0 control at α=0.70, the anchor's H2 mechanism block with
+the damped-FedAvg control, then C's calibration, B's censored decay rungs and
+exp2's second α.
+
+Two harness defects fixed first, both with tests:
+
+- **Run-to-run nondeterminism (§23).** Aggregation now sums client results in
+  partition-id order (`FedConfig.aggregation_order`, default `"cid"`),
+  deterministic kernels are requested in the driver, every client actor and
+  the centralized loop, and the cuBLAS workspace is pinned at package import.
+  `tests/test_determinism.py` asserts two runs of one spec give identical
+  histories and weights, bit for bit. A Flower cid is a random node id per
+  run, so the sort key is the partition id the client now reports in its fit
+  metrics.
+- **SCAFFOLD's `c_i` was actor-local and Flower's pool is not partition-affine**
+  (RUNS_TODO). State now lives in `ScaffoldStrategy` keyed by partition and is
+  shipped per client in `configure_fit`. Option I (`scaffold_option=1`, mean
+  local gradient) is implemented and is the estimator used under AdamW; it is
+  tested equal to Option II under GD. The 15 banked SCAFFOLD runs are
+  withheld and re-run in the chain. `persist_local_opt_state` has the same
+  affinity defect and is NOT fixed.
+
+Both new config fields default to the fixed behaviour and enter the run-id
+hash only when a spec states them, so bare controls still dedup against
+banked runs.
+
 ## Current state — 2026-09-07
 
 **1,685 runs banked · ~1,366 machine-hours · 0 failed runs all campaign.**

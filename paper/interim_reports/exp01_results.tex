@@ -1,0 +1,326 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage[table]{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\definecolor{grokgreen}{HTML}{2E8B57}
+\definecolor{nogrokred}{HTML}{CC3333}
+
+\title{Experiments 0--1: Width Validation \& Centralized Phase Boundary}
+\author{Federated Learning Grokking Project}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+%% ============================================================
+\section{Experiment 0: Width Validation}
+%% ============================================================
+
+\paragraph{Goal.} Verify that hidden width $N = 256$ supports grokking across the
+$\alpha$ range, so that grokking failures in later FL experiments are attributable
+to federation---not insufficient model capacity.
+
+\paragraph{Setup.}
+\begin{itemize}[nosep]
+  \item Task: $(a + b) \bmod 97$, quadratic activation, MSE loss, full-batch GD, $\text{lr} = 50$
+  \item $N \in \{100, 128, 200, 256\}$, \;$\alpha \in \{0.1, 0.3, 0.5\}$, \;seed $= 42$
+  \item $S_{\max} = 50{,}000$ gradient steps per run (12 runs total)
+\end{itemize}
+
+\paragraph{Key findings.}
+\begin{itemize}[nosep]
+  \item \textbf{Width does not matter} in this regime.
+        All four widths produce nearly identical $T_{\text{grok}}$ at matched $\alpha$
+        (Table~\ref{tab:exp0}).
+  \item At $\alpha = 0.1$, \textbf{no width groks} within $50{,}000$ steps.
+        Extended runs to $200{,}000$ steps confirm: test accuracy stays at $\sim 0.5\%$,
+        IPR stays at $\sim 0.02$ (random-init level), and test loss is
+        \emph{monotonically rising}. This is not a budget issue---the model is
+        actively diverging from generalisation.
+  \item At $\alpha \geq 0.3$, all widths reach $100\%$ test accuracy with
+        IPR $\sim 0.42$--$0.49$.
+  \item \textbf{Conclusion:} $N = 256$ is validated as the fixed width for all
+        subsequent experiments. The interesting variable is $\alpha$, not $N$.
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{Experiment 0: $T_{\text{grok}}$ across widths and training fractions.}
+\label{tab:exp0}
+\begin{tabular}{lcccc}
+\toprule
+$\alpha$ & $N = 100$ & $N = 128$ & $N = 200$ & $N = 256$ \\
+\midrule
+0.1 & $\infty$ & $\infty$ & $\infty$ & $\infty$ \\
+0.3 & 13{,}100 & 12{,}200 & 12{,}200 & 12{,}600 \\
+0.5 &  8{,}600 &  8{,}300 &  7{,}800 &  7{,}600 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp0_width_validation.png}
+\caption{Experiment 0 summary. \textbf{Left:} $T_{\text{grok}}$ vs.\ width---flat
+at each $\alpha$; red crosses indicate no grokking. \textbf{Centre:} Final test
+accuracy heatmap; clean binary transition between $\alpha = 0.1$ (0\%) and
+$\alpha = 0.3$ (100\%). \textbf{Right:} Final IPR confirms Fourier structure
+only forms when grokking occurs.}
+\label{fig:exp0_summary}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp0_test_acc_curves.png}
+\caption{Test accuracy curves for all Exp~0 runs. At $\alpha = 0.3$ and $0.5$,
+the classic grokking S-curve is visible, with all widths overlapping. At
+$\alpha = 0.1$, test accuracy is indistinguishable from chance ($1/97 \approx 1\%$).}
+\label{fig:exp0_curves}
+\end{figure}
+
+\clearpage
+
+%% ============================================================
+\section{Experiment 1: Centralized Phase Boundary}
+%% ============================================================
+
+\paragraph{Goal.} Determine the critical training fraction $\alpha_c$ below which
+centralised grokking fails, and measure $T_{\max}$ (the slowest grokking observed)
+to calibrate all FL step budgets.
+
+\paragraph{Setup.}
+\begin{itemize}[nosep]
+  \item $N = 256$ (validated in Exp~0), all other hyperparameters as in Exp~0
+  \item $\alpha \in \{0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5\}$
+  \item Seeds $\in \{42, 123, 456\}$ (3 seeds per $\alpha$)
+  \item $S_{\max} = 100{,}000$ steps (24 runs)
+\end{itemize}
+
+\paragraph{Phase boundary results (at $S_{\max} = 100{,}000$).}
+\begin{itemize}[nosep]
+  \item $\alpha \leq 0.2$: \textcolor{nogrokred}{\textbf{No grokking.}}
+        All seeds fail. Test accuracy $< 7\%$ at best.
+  \item $\alpha = 0.3$: \textcolor{grokgreen}{\textbf{3/3 seeds grok.}}
+        $T_{\text{grok}} = 12{,}833 \pm 404$ steps.
+  \item $\alpha = 0.5$: \textcolor{grokgreen}{\textbf{3/3 seeds grok.}}
+        $T_{\text{grok}} = 7{,}667 \pm 115$ steps.
+  \item Initial estimate: $\alpha_c^{\text{practical}} = 0.3$, \;$T_{\max} = 13{,}300$.
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{Experiment 1: Phase boundary at $S_{\max} = 100{,}000$.}
+\label{tab:exp1}
+\begin{tabular}{lccccc}
+\toprule
+$\alpha$ & $n_{\text{train}}$ & Grokked & $T_{\text{grok}}$ (mean $\pm$ std) & Final acc (\%) & Final IPR \\
+\midrule
+0.03  &    282 & 0/3 & $\infty$ &   0.0 & 0.020 \\
+0.05  &    470 & 0/3 & $\infty$ &   0.1 & 0.020 \\
+0.075 &    705 & 0/3 & $\infty$ &   0.3 & 0.021 \\
+0.1   &    940 & 0/3 & $\infty$ &   0.5 & 0.021 \\
+0.15  & 1{,}411 & 0/3 & $\infty$ &   0.6 & 0.022 \\
+0.2   & 1{,}881 & 0/3 & $\infty$ &   3.5 & 0.054 \\
+\rowcolor{grokgreen!15}
+0.3   & 2{,}822 & 3/3 & $12{,}833 \pm 404$  & 100.0 & 0.472 \\
+\rowcolor{grokgreen!15}
+0.5   & 4{,}704 & 3/3 & $7{,}667 \pm 115$   & 100.0 & 0.484 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_heatmap.png}
+\caption{Grokking wavefront. Each row is one $\alpha$ value; colour encodes test
+accuracy over time. The sharp horizontal edge between $\alpha = 0.2$ and $0.3$
+is the phase boundary. Stars mark $T_{\text{grok}}$.}
+\label{fig:exp1_heatmap}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_gen_gap.png}
+\caption{Generalisation gap (train acc $-$ test acc) over time. All $\alpha$ values
+memorise by $\sim 2{,}000$ steps (gap $\to 100\%$). For $\alpha \geq 0.3$, the gap
+collapses as grokking completes. For $\alpha \leq 0.2$, the gap remains at $100\%$
+permanently.}
+\label{fig:exp1_gen_gap}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_loss_dynamics.png}
+\caption{Train and test loss (log scale) for each $\alpha$. Below the boundary
+($\alpha \leq 0.15$), test loss rises monotonically. At $\alpha = 0.2$, test loss
+plateaus. At $\alpha \geq 0.3$, test loss eventually plunges---the grokking moment.}
+\label{fig:exp1_loss}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_seed_consistency.png}
+\caption{Seed consistency at key $\alpha$ values. At $\alpha = 0.2$, all 3 seeds
+agree: no grokking. At $\alpha = 0.3$, all 3 grok within 700 steps of each other.
+The phenomenon is highly reproducible.}
+\label{fig:exp1_seeds}
+\end{figure}
+
+\clearpage
+
+%% ============================================================
+\subsection{Extended Runs: Refining the True Phase Boundary}
+%% ============================================================
+
+\paragraph{Motivation.} The $\alpha = 0.2$ runs at $100{,}000$ steps showed
+test accuracy of $3.5\%$ and IPR of $0.054$---above random init ($0.02$) but
+far from grokked ($\sim 0.47$). Is this a true boundary, or is grokking merely
+very slow?
+
+\paragraph{Result.} Extended to $1{,}000{,}000$ steps, \textbf{$\alpha = 0.2$ groks}:
+\begin{itemize}[nosep]
+  \item $T_{50} = 555{,}000$, \;$T_{\text{grok}} = 805{,}000$
+  \item Final test accuracy: $98.7\%$, \;final IPR: $0.253$
+  \item The S-curve shape is \emph{identical} to $\alpha = 0.3$ and $0.5$,
+        stretched by two orders of magnitude
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_alpha02_1M.png}
+\caption{$\alpha = 0.2$ groks at $T_{\text{grok}} = 805{,}000$---roughly $100\times$
+slower than $\alpha = 0.5$. \textbf{Left:} Test accuracy curves for $\alpha \in
+\{0.2, 0.3, 0.5\}$. \textbf{Centre:} IPR at $\alpha = 0.2$ is still climbing at
+$1$M steps. \textbf{Right:} Log-scale view reveals the $\sim 100\times$ gap.}
+\label{fig:exp1_alpha02}
+\end{figure}
+
+\paragraph{Fine-grained boundary scouting.} Additional runs at
+$\alpha \in \{0.21, 0.22, 0.25, 0.28\}$ reveal the full scaling:
+
+\begin{table}[h]
+\centering
+\caption{Refined phase boundary: $T_{\text{grok}}$ vs.\ $\alpha$ and dataset size.}
+\label{tab:exp1_refined}
+\begin{tabular}{lrrrrc}
+\toprule
+$\alpha$ & $n_{\text{train}}$ & $T_{50}$ & $T_{\text{grok}}$ & Ratio vs.\ $\alpha\!=\!0.5$ & Budget needed \\
+\midrule
+0.20 & 1{,}881 & 555{,}000 & 805{,}000 & $106\times$ & $\sim 1$M \\
+0.21 & 1{,}975 & 138{,}000 & 166{,}000 & $22\times$  & $\sim 200$k \\
+0.22 & 2{,}069 &  45{,}000 &  59{,}000 & $7.8\times$ & $\sim 80$k \\
+0.25 & 2{,}352 &  19{,}000 &  24{,}000 & $3.2\times$ & $\sim 40$k \\
+0.28 & 2{,}634 &  13{,}000 &  16{,}000 & $2.1\times$ & $\sim 25$k \\
+0.30 & 2{,}822 &  10{,}600 &  12{,}600 & $1.7\times$ & $\sim 20$k \\
+0.50 & 4{,}704 &   6{,}800 &   7{,}600 & $1.0\times$ & $\sim 12$k \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_refined_boundary.png}
+\caption{Refined phase boundary with dataset sizes annotated.
+\textbf{Left:} $T_{\text{grok}}$ vs.\ $\alpha$ on log scale; the green band
+marks $\alpha = 0.25$, the practical sweet spot for FL experiments.
+\textbf{Centre:} $T_{\text{grok}}$ vs.\ $n_{\text{train}}$ on log-log axes.
+\textbf{Right:} Test accuracy curves zoomed to $200{,}000$ steps.}
+\label{fig:exp1_refined}
+\end{figure}
+
+\clearpage
+
+%% ============================================================
+\subsection{Mechanistic Analysis: Critical Scaling}
+%% ============================================================
+
+\paragraph{Key finding.} The grokking step follows a \textbf{power-law divergence}:
+\begin{equation}
+  \boxed{T_{\text{grok}} \;\propto\; (\alpha - \alpha_c)^{-\gamma}, \qquad
+  \alpha_c \approx 0.198, \quad \gamma \approx 0.99, \quad R^2 = 0.978}
+  \label{eq:scaling}
+\end{equation}
+
+\paragraph{Interpretation.}
+\begin{itemize}[nosep]
+  \item The exponent $\gamma \approx 1$ means $T_{\text{grok}}$ is roughly
+        \emph{inversely proportional} to the distance from the critical point.
+        This explains the extreme sensitivity: adding 94 training samples
+        ($\alpha: 0.20 \to 0.21$) cuts $T_{\text{grok}}$ by $5\times$ because
+        the denominator $(\alpha - \alpha_c)$ grows from $0.002$ to $0.012$.
+  \item $\alpha_c \approx 0.198$ corresponds to $n_{\text{train}} \approx 1{,}863$
+        samples out of $p^2 = 9{,}409$ total pairs, or a parameter-to-data ratio
+        of $\sim 40$.
+  \item This is a \textbf{second-order phase transition}: no discontinuity in the
+        order parameter (test accuracy at fixed time), only a diverging timescale.
+\end{itemize}
+
+\paragraph{Mechanistic picture (Figure~\ref{fig:exp1_mech}).}
+\begin{itemize}[nosep]
+  \item \textbf{All $\alpha$ values traverse the same dynamical path} through
+        (IPR, test accuracy) space. Grokking is a universal process; $\alpha$ only
+        controls the clock speed.
+  \item \textbf{Memorise first, then organise.} Train loss drops immediately
+        (memorisation), but IPR stays flat. Only after memorisation is complete
+        does the network begin reorganising weights into Fourier structure.
+  \item \textbf{Less data = weaker gradient signal for the Fourier solution.}
+        The memorised solution provides less gradient information pointing toward
+        the correct periodic structure. Near $\alpha_c$, this signal is so weak
+        that the optimisation takes exponentially longer to separate signal from
+        noise in weight space.
+  \item \textbf{Test loss inflection marks grokking onset.} The peak of test loss
+        (before it starts declining) is the precise moment the Fourier solution
+        begins to dominate. This inflection shifts from $\sim 5{,}000$ steps
+        ($\alpha = 0.5$) to $> 200{,}000$ steps ($\alpha = 0.20$).
+\end{itemize}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_mechanistic.png}
+\caption{Mechanistic investigation of the phase boundary.
+\textbf{(1)}~Fourier structure formation rate: all $\alpha$ build the same
+representation at different speeds.
+\textbf{(2)}~First-layer weight growth drives grokking.
+\textbf{(3)}~Test loss inflection point = grokking onset.
+\textbf{(4)}~Phase portrait: all trajectories follow the same attractor.
+\textbf{(5)}~Train loss vs.\ IPR: memorisation precedes organisation.
+\textbf{(6)}~Power-law fit: $T_{\text{grok}} \propto (\alpha - 0.198)^{-0.99}$,
+$R^2 = 0.978$.}
+\label{fig:exp1_mech}
+\end{figure}
+
+\clearpage
+
+%% ============================================================
+\section{Implications for FL Experiments}
+%% ============================================================
+
+\begin{itemize}[nosep]
+  \item \textbf{True critical point:} $\alpha_c \approx 0.198$ (not $0.3$ as the
+        $100{,}000$-step budget suggested). The practical boundary depends on
+        compute budget.
+  \item \textbf{FL sweet spot:} $\alpha = 0.25$ ($T_{\text{grok}} = 24{,}000$,
+        $n_{\text{train}} = 2{,}352$). An FL budget of $S_{\text{FL}} = 50{,}000$
+        gives $2\times$ headroom---tight enough that FL overhead matters, generous
+        enough that grokking is achievable.
+  \item \textbf{Experiment 2 grid:} $\alpha \in \{0.25, 0.3, 0.5\}$, \;
+        $K \in \{2, 5, 10, 20\}$.
+        At $\alpha = 0.25$ with $K = 5$: each client sees $\sim 470$ samples
+        ($\alpha_{\text{eff}} = 0.05$ per client), which is well below the
+        centralised phase boundary. If FedAvg groks here, aggregation is powerful.
+  \item \textbf{Adaptive budgets:}
+        $S_{\text{FL}} = 50{,}000$ (cap),
+        $S_{\text{rescue}} = 80{,}000$ (cap).
+  \item \textbf{The central question for Exp~2:} Does FL shift $\alpha_c$? If
+        centralised groks at $\alpha = 0.25$ in $24{,}000$ steps but FL does not
+        grok within $50{,}000$, that is a measurable shift of the phase boundary.
+\end{itemize}
+
+\end{document}

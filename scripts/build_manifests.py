@@ -2435,27 +2435,47 @@ def x_b_wd_zero_fl():
     wd=1.0 (13.5), and new transformer work runs at 0.1 (the 2026-08-20 standing
     decision). This is a mechanism control, tagged tier X like the other ones.
     """
-    base = {**SETUP_B, "weight_decay": 0.0, "alpha": 0.30}
+
+    # MOVED TO alpha=0.70 on 2026-09-09 (RUNS_TODO entry 1). At alpha=0.30 wd=0
+    # cannot grok at any budget -- B's decay band fits t_first_cross ~ 4,500/wd,
+    # the centralized control sits at 2.5-5.9% test after 100,000 epochs, and
+    # the 1M-step anchor (entry 3) showed the run STOPS rather than slows once
+    # fp32 train loss underflows. Entry 2's alpha ladder found the lowest rung
+    # that groks 3/3 at wd=0 within 100,000 epochs: alpha=0.70, with a ~28,850
+    # step delay intact for federation to act on. The matched wd ladder (0.1,
+    # 1.0) is re-run at 0.70 so the comparison differs in decay alone; the
+    # alpha=0.30 ladder stays banked and is not this arm's control any more.
+    # The alpha=0.30 federated cells this manifest used to claim never ran
+    # (FORCE_REWRITE names the reason).
+    #
+    # Budget 20,000 rounds = 100,000 steps as before: the centralized wd=0
+    # ceiling at 0.70 crosses at 3,900-31,200 across seeds, and federation on B
+    # roughly doubles the delay (13.7), so 100,000 leaves >3x on the slowest.
+    alpha = 0.70
+    base = {**SETUP_B, "alpha": alpha}
     tags = {"tier": "X", "group": "b_wd_zero", "experiment": "control",
             "setup": "B"}
 
-    # The ceiling. Already banked in x_controls -- reproduced here so the
-    # manifest declares the whole comparison; identical spec, identical content
-    # hash, so the launcher skips it and it costs nothing.
+    # Centralized ceilings. wd=0 dedups against x_b_wd_zero_alpha (100,000
+    # epochs, log_every 50); wd=0.1 against b_wd01_alpha_ladder (60,000 epochs,
+    # log_every 50); wd=1.0 at this alpha is new. Written field-for-field to
+    # hash-match the banked rows.
     specs = expand_grid(
-        {"mode": "centralized", **base, "epochs": 100_000, "log_every": 200},
-        {"seed": SEEDS3},
-        tags=tags,
-    )
+        {"mode": "centralized", **base, "weight_decay": 0.0,
+         "epochs": 100_000, "log_every": 50},
+        {"seed": SEEDS3}, tags=tags)
+    specs += expand_grid(
+        {"mode": "centralized", **base, "epochs": 60_000, "log_every": 50},
+        {"weight_decay": [0.1, 1.0], "seed": SEEDS3}, tags=tags)
 
-    # The federated arm. K=10 and K=20 are where the wd ladder above is complete.
+    # The federated arm: the wd ladder at K=10 and K=20, iid, E=5.
     specs += expand_grid(
         {"mode": "federated", **base, "local_epochs": 5, "partition": "iid",
          "strategy": "fedavg", "fraction_train": 1.0,
          "num_rounds": 20_000, "eval_every": FL_EVAL_EVERY},
-        {"num_clients": [10, 20], "seed": SEEDS3},
-        tags=tags,
-    )
+        {"weight_decay": [0.0, 0.1, 1.0], "num_clients": [10, 20],
+         "seed": SEEDS3},
+        tags=tags)
     return specs
 
 
@@ -3095,7 +3115,367 @@ def x_e50_long():
     )
     return specs
 
+
+# ── T6: the algorithm comparison on every setup (plans/exp5-algorithms-across-setups.md)
+
+# Per-method calibration ladders. The anchor's t3_server_lr_calibration found
+# the adaptive methods' cliff between server_lr 0.1 and 0.3 on one cell; 0.03 is
+# added so the optimum is bracketed from below as well on setups whose loss
+# scale differs (CE on B-E against MSE on A). FedProx's mu ladder spans v1's
+# exp5 range, where mu=0.001 grokked and mu>=0.01 never did -- v2 froze 0.01.
+ALGO_LADDERS = [
+    ("fedadam", {"server_lr": [0.01, 0.03, 0.1, 0.3]}),
+    ("fedyogi", {"server_lr": [0.01, 0.03, 0.1, 0.3]}),
+    ("fedavgm", {"server_lr": [0.3, 1.0], "server_momentum": [0.5, 0.9]}),
+    ("fedprox", {"proximal_mu": [1e-4, 1e-3, 1e-2, 1e-1]}),
+]
+
+
+def _t6_calibration_specs(labels):
+    """One calibration block per setup at its banked K=10, E=5, iid cell.
+
+    Built from _k10_blocks so the FedAvg reference is the banked control
+    (t5_local_epochs' E=5 rung). Budget is that block's RUNG budget -- for B
+    that is 40,000 rounds, the figure the 2026-09-01 audit set after the
+    20,000-round control came out at 1.3x headroom; a FedProx rung that is
+    merely slower than FedAvg must not censor. No checkpoints: 252 runs' worth
+    of per-client weights would buy nothing the comparison (Phase 2) does not
+    buy with checkpoints on.
+
+    SCAFFOLD has no knob, so B-E get it once here (Option I, the estimator that
+    is valid under AdamW) rather than waiting for Phase 2 to be the first time
+    it ever runs off the anchor. A's SCAFFOLD is banked on H1-H3 (Option II).
+    """
+    specs = []
+    for label, common, _ctrl_r5, rung_r5, _ckpt5 in _k10_blocks():
+        if label not in labels:
+            continue
+        bare = {k: v for k, v in common.items()
+                if k not in ("checkpoint_client_weights", "checkpoint_every")}
+        cell = _e_scaled(bare, rung_r5, 5, 0)
+        tags = {"tier": "T6", "group": "algo_cal", "experiment": "cal",
+                "setup": label}
+        for strategy, axes in ALGO_LADDERS:
+            specs += expand_grid({**cell, "strategy": strategy},
+                                 {**axes, "seed": SEEDS3},
+                                 tags={**tags, "algorithm": strategy})
+        if label != "A":
+            specs += expand_grid({**cell, "strategy": "scaffold", "scaffold_option": 1},
+                                 {"seed": SEEDS3},
+                                 tags={**tags, "algorithm": "scaffold"})
+    return specs
+
+
+def t6_algo_calibration():
+    """PHASE 1 of the algorithm plan: calibrate every method on A, B, D, E.
+
+    THE GAP. Every non-FedAvg run in the corpus (132) is on the anchor, and
+    FedProx was compared at the one mu (0.01) that v1 had already shown never
+    groks, with no calibration arm. RESULTS 17.1's ordering and 17.4's
+    direction-vs-magnitude argument rest on that. This is the per-setup
+    calibration the comparison needs, at each setup's K=10, E=5, iid working
+    point, 3 seeds, 16 configs per setup plus SCAFFOLD Option I on B-E.
+
+    > SELECTION RULE, fixed before launch. Per (setup, method): the rung with
+    > the lowest median t_first_cross among rungs that grok 3/3; ties inside
+    > the seed spread go to the smaller step (smaller server_lr / mu). A method
+    > with no 3/3 rung enters Phase 2 at its best partial rung, labelled so.
+    > Read t_memo beside t_first_cross: a server optimiser that moves
+    > MEMORISATION is the decay clock (14.3) under a new name, not a speedup.
+
+    C is a separate manifest (t6_algo_calibration_c): its numbers are withheld
+    under RESULTS 23 until the aggregation-order fix is shown to make it
+    reproducible, and it is the most expensive setup per run.
+    """
+    return _t6_calibration_specs({"A", "B", "D", "E"})
+
+
+def t6_algo_calibration_c():
+    """t6_algo_calibration's setup-C block. Run last; droppable (see plan)."""
+    return _t6_calibration_specs({"C"})
+
+
+def x_h2_mechanism():
+    """PHASE 4 of the algorithm plan: the anchor's H2 cell, instrumented.
+
+    Two things RESULTS asks for and no banked run can supply.
+
+    1. CHECKPOINTED METHOD ARMS. No algorithm run carries weights
+       (checkpoint_every=0 on all 132), so 16.2's spectral-IPR reading -- the
+       one mechanism measurement in the project that precedes grokking -- has
+       never been taken under SCAFFOLD or FedProx. H2 (alpha=0.25, K=10, E=25,
+       Dirichlet 0.1) is the cell 17.4 built its argument on: FedAvg 61,000,
+       SCAFFOLD 5,000 with 188x less divergence, FedProx censored with 51x
+       less. Re-run with checkpoints every 500 rounds and per-client weights,
+       5 seeds. FedProx at BOTH mu=0.01 (the banked, failing value) and
+       mu=0.001 (v1's grokking value): whether a FedProx that groks builds
+       Fourier structure on FedAvg's schedule or SCAFFOLD's is the reading.
+
+    2. DAMPED FEDAVG. 17.4 and 18.4 both name it as the control that separates
+       "FedProx suppresses the learning signal" from "FedProx is a smaller
+       step": plain FedAvg with the local lr scaled by 0.5, 0.2 and 0.1. Under
+       GD the time to any point scales as 1/lr, so the budget scales the same
+       way (20,000 / 50,000 / 100,000 rounds) and the SAME-budget reading is
+       taken from the prefix at 10,000 rounds. If damped FedAvg at 0.1 also
+       fails inside 10,000 rounds and groks later, FedProx's failure is a
+       step-size story and 17.4 is rewritten; if it groks inside 10,000, the
+       proximal term does something a smaller step does not. 5 seeds at 0.5
+       and 0.2, 3 at 0.1 (the 6-hour cell).
+    """
+    h2 = {**SETUP_A, "alpha": 0.25, "num_clients": 10, "local_epochs": 25,
+          "partition": "dirichlet", "dirichlet_alpha": 0.1}
+    ckpt = {"checkpoint_every": 500, "checkpoint_client_weights": True}
+    tags = {"tier": "X", "group": "h2_mechanism", "experiment": "algo",
+            "setting": "H2", "setup": "A"}
+    arms = [
+        ("fedavg", {}),
+        ("scaffold", {}),
+        ("fedprox", {"proximal_mu": 0.01}),
+        ("fedprox", {"proximal_mu": 0.001}),
+        ("fedadam", {"server_lr": 0.1}),
+    ]
+    specs = []
+    for strategy, kw in arms:
+        specs += expand_grid({**h2, **ckpt, "strategy": strategy, **kw},
+                             {"seed": SEEDS5},
+                             tags={**tags, "algorithm": strategy})
+    for factor, rounds, seeds in ((0.5, 20_000, SEEDS5), (0.2, 50_000, SEEDS5),
+                                  (0.1, 100_000, SEEDS3)):
+        scale = rounds // FL_ROUNDS
+        specs += expand_grid(
+            {**h2, "strategy": "fedavg", "lr": SETUP_A["lr"] * factor,
+             "num_rounds": rounds, "checkpoint_every": 500 * scale,
+             "checkpoint_client_weights": True},
+            {"seed": seeds},
+            tags={**tags, "algorithm": f"fedavg_damped_{factor}"})
+    return specs
+
+
+def x_b_decay_band_long():
+    """p1_b_decay_band's two censored rungs, given the budget the law implies.
+
+    B's band at alpha=0.30 fits t_first_cross ~ 4,500/wd (13.5, entry 2's side
+    finding), which puts wd=0.03 at ~150,000 steps and wd=0.01 at ~450,000
+    against the 50,000 they were given. RESULTS 13.5's "sharp threshold below
+    wd=0.1" is therefore a clock artifact until measured; the 1M-step wd=0 run
+    (entry 3) says the mechanism is decay-driven travel after memorisation, so
+    at wd>0 the run does not stop, only slows. 200,000 and 600,000 epochs give
+    1.3x on the prediction. 3 seeds, 6 runs, ~31 slot-hours.
+    """
+    tags = {"tier": "X", "group": "b_decay_band_long", "experiment": "decay",
+            "setup": "B"}
+    specs = []
+    for wd, epochs in ((0.03, 200_000), (0.01, 600_000)):
+        specs += expand_grid(
+            {"mode": "centralized", **SETUP_B, "alpha": 0.30,
+             "weight_decay": wd, "epochs": epochs, "log_every": 50},
+            {"seed": SEEDS3}, tags=tags)
+    return specs
+
+
+def x_scaffold_rerun():
+    """t3_algorithm_comparison's SCAFFOLD cells, re-run with server-side c_i.
+
+    The banked SCAFFOLD runs read each client's control variate from a dict in
+    whichever Ray actor happened to serve that partition, and Flower's pool
+    does not pin partitions to actors -- so the correction was applied with a
+    zero or stale c_i on most client-rounds (RUNS_TODO, 2026-09-09). H2 is
+    re-measured with checkpoints in x_h2_mechanism; H1 and H3 here, bare, 5
+    seeds, so the whole 17.1 column is replaced. `scaffold_option: 2` is the
+    default and is stated only so the spec hashes to a NEW id: the banked cell
+    is the same config and must not dedup against this.
+    """
+    cells = [
+        ("H1", {"alpha": 0.25, "num_clients": 10, "local_epochs": 25, "partition": "iid"}),
+        ("H3", {"alpha": 0.30, "num_clients": 10, "local_epochs": 50,
+                "partition": "dirichlet", "dirichlet_alpha": 0.1}),
+    ]
+    specs = []
+    for label, cell in cells:
+        specs += expand_grid(
+            {**SETUP_A, **cell, "strategy": "scaffold", "scaffold_option": 2},
+            {"seed": SEEDS5},
+            tags={"tier": "T3", "group": "algorithms", "experiment": "algo",
+                  "setting": label, "algorithm": "scaffold", "setup": "A"})
+    return specs
+
+
+
+# ── T6 Phase 2: the fair comparison, at each setup's calibrated working point
+
+# Filled in from t6_algo_calibration as each setup's block lands, by the
+# selection rule in that manifest's docstring (lowest median t_first_cross
+# among rungs that grok 3/3; ties to the smaller step). A setup absent here is
+# not emitted, so this manifest GROWS as calibration completes -- new ids only,
+# never orphaned ones.
+#
+# B, 2026-09-11 (51/51 run). FedAvg on this cell crosses at 55,900.
+#   fedadam  slr=0.03  3/3   2,100   (0.01 -> 7,900 3/3; 0.1 -> 0/3, t_memo 157,400)
+#   fedyogi  slr=0.03  3/3   2,000   (0.01 -> 9,700 3/3; 0.1 -> 0/3, t_memo 39,550)
+#   fedavgm  slr=1.0 mom=0.9 3/3 3,400
+#   fedprox  NO RUNG GROKS 3/3 -- best partial mu=0.01, 1/3 at 102,200; enters
+#            Phase 2 labelled as failing calibration, per the selection rule.
+# The adaptive optimum is 0.03 where the anchor's is 0.1, and 0.1 does not just
+# slow B down, it stops it MEMORISING. The usable band is narrower here than on
+# A and sits a factor of 3 lower.
+#
+# D and E, 2026-09-12 (51/51 each). Two selections turned on the tie-break, and
+# both times the literally-fastest rung was a thrashing one:
+#   D fedyogi slr=0.3 has the lower median t_fc (1,800 vs 2,400) and 3/3, but
+#   335/383/702 POST-GROK DIPS against 0/1/2 at slr=0.1, and finals of
+#   85.0/85.8/91.6 against a bar of exactly 85.0 -- one seed ends ON it. The
+#   per-seed ranges overlap (1,600-2,600 vs 2,300-3,200), so the rule's "ties
+#   within the seed spread go to the smaller step" fires and selects 0.1.
+#   D fedadam slr=0.3 is 1/3 with 1,273-1,539 dips; 0.1 is 3/3 with 0-47.
+# The same trap on the anchor is worse and is why crossing alone cannot select:
+# A fedadam slr=0.3 records t_first_cross=400, the fastest number in the whole
+# campaign, and ends at 1.0% test -- chance. Selection requires a SUSTAINED
+# result (RESULTS 14.4), never a first crossing.
+#
+# E IS THE COUNTEREXAMPLE TO THE ADAPTIVE STORY and its failures are real, not
+# 20's sustain artifact: E's bar is 90.0 and the failing arms END below it.
+# FedYogi never crosses at any rung; SCAFFOLD never crosses (final ~63%);
+# FedAdam crosses 3/3 at slr=0.1 and then falls back to 81.5-88.8. Only FedAvgM
+# (0.3, 0.5) and FedProx (mu=1e-4) hold the bar, and BOTH ARE SLOWER THAN
+# FedAvg (0.56x and 0.82x). No method beats FedAvg on MNIST.
+CALIBRATED = {
+    "D": {
+        "fedadam": {"server_lr": 0.1},
+        "fedyogi": {"server_lr": 0.1},
+        "fedavgm": {"server_lr": 1.0, "server_momentum": 0.9},
+        "fedprox": {"proximal_mu": 0.0001},   # 0/3 at EVERY mu: fails calibration
+        "scaffold": {"scaffold_option": 1},
+    },
+    "E": {
+        "fedadam": {"server_lr": 0.1},        # crosses 3/3, holds 0/3
+        "fedyogi": {"server_lr": 0.1},        # never crosses at any rung
+        "fedavgm": {"server_lr": 0.3, "server_momentum": 0.5},
+        "fedprox": {"proximal_mu": 0.0001},
+        "scaffold": {"scaffold_option": 1},   # never crosses, final ~63%
+    },
+    "B": {
+        "fedadam": {"server_lr": 0.03},
+        "fedyogi": {"server_lr": 0.03},
+        "fedavgm": {"server_lr": 1.0, "server_momentum": 0.9},
+        "fedprox": {"proximal_mu": 0.01},
+        "scaffold": {"scaffold_option": 1},
+    },
+}
+
+# The cell where FedAvg FAILS, per setup: the banked spec, field for field, so
+# the FedAvg arm hashes to the banked run and only the seeds beyond it cost
+# anything. A is not here -- its rescue cell is H2, already in x_h2_mechanism.
+RESCUE_CELLS = {
+    # NOTE: SETUP_B/C/D/E carry no "mode" (only SETUP_A does), so each cell
+    # states it -- without it run_id hashes a different spec and the FedAvg arm
+    # stops matching the banked run it is supposed to dedup against.
+    "B": ({"mode": "federated", **SETUP_B, "alpha": 0.30, "num_clients": 10, "local_epochs": 5,
+           "partition": "dirichlet", "dirichlet_alpha": 0.1, "fraction_train": 1.0,
+           "num_rounds": 20_000, "eval_every": FL_EVAL_EVERY,
+           "checkpoint_every": 2_000, "checkpoint_client_weights": True},
+          "t3a dir_alpha=0.1: 0/3, peak train 31%, fails to MEMORISE"),
+    "D": ({"mode": "federated", **SETUP_D, "alpha": 0.30, "num_clients": 10, "local_epochs": 50,
+           "partition": "iid", "fraction_train": 1.0,
+           "num_rounds": 5_000, "eval_every": 2,
+           "checkpoint_every": 500, "checkpoint_client_weights": True},
+          "t5 E=50: 0/3 at 250k AND 2M steps, the RESULTS 22 equilibrium"),
+    "E": ({"mode": "federated", **{k: v for k, v in SETUP_E.items() if k != "batch_size"},
+           "n_train": 2000, "n_test": 5000, "batch_size": 100,
+           "num_clients": 10, "local_epochs": 5, "partition": "label_block",
+           "fraction_train": 1.0, "num_rounds": 8_000, "eval_every": FL_EVAL_EVERY,
+           "checkpoint_every": 800, "checkpoint_client_weights": True},
+          "t3b label_block: 0/3, the only MNIST breakdown"),
+    "C": ({"mode": "federated", **SETUP_C, "hidden_width": 256, "alpha": 0.40, "num_clients": 10,
+           "local_epochs": 5, "partition": "target", "fraction_train": 1.0,
+           "num_rounds": 40_000, "eval_every": FL_EVAL_EVERY,
+           "checkpoint_every": 4_000, "checkpoint_client_weights": True},
+          "t3b target: 0/3, incoherent structure"),
+}
+
+# Adaptive server LRs are read at the SELECTED rung and one rung BELOW it at the
+# rescue cell only. Reason: B's calibration cell runs wd=0.1 and B's rescue cell
+# runs wd=1.0 (its t3a working point), a 10x decay difference the calibration
+# did not cross -- and B's usable adaptive band is one rung wide, 0.03 groks 3/3
+# while 0.1 destroys memorisation. Without the neighbour, an adaptive method that
+# fails to rescue cannot be told apart from one whose server LR fell off the
+# cliff, and that is the whole reading. 3 seeds on the neighbour, 5 on the
+# selected rung. FedAvgM and FedProx are not hedged: their bands are broad
+# (FedAvgM groks 3/3 at all four rungs) or already failing everywhere.
+HEDGE_BELOW = {0.03: 0.01, 0.1: 0.03, 0.01: 0.003, 0.3: 0.1}
+
+
+def t6_algo_comparison():
+    """PHASE 2 of the algorithm plan: every method at its calibrated point.
+
+    Two cells per setup, 5 seeds, checkpoints ON -- the channel RESULTS 16.2
+    reads and that no banked algorithm run has (checkpoint_every=0 on all 132).
+
+    CELL W, the working point: the calibration cell, where FedAvg groks. Ranks
+    methods on median t_first_cross against the banked FedAvg line. This is
+    17.1's comparison made portable.
+
+    CELL R, the rescue cell: a banked configuration where FedAvg FAILS. The
+    order parameter is `frac` grokked, not time: a method that takes a 0/3 cell
+    to >=3/5 has rescued it. No mitigation has ever been run on a failing cell
+    in this project, so this is the contribution-3 result the paper lacks.
+
+    > DECISION RULES.
+    > Cell W: rank on median t_first_cross with the bootstrap CI; report the
+    >   ratio to FedAvg. Read t_memo beside it -- a server optimiser that moves
+    >   MEMORISATION is the decay clock (14.3), not a speedup.
+    > Cell R: check peak_train_acc FIRST. On B and C the failure is
+    >   memorisation, so a rescue must move t_memo off infinity; on D
+    >   memorisation is intact and a rescue must break the equilibrium, which
+    >   means weight norm and drift/round leaving 101.5 and 8.0; on E the
+    >   failure is label_block partitioning.
+    > Either cell: SCAFFOLD against FedProx at a calibrated mu is 17.4's
+    >   direction-vs-magnitude argument re-run fairly. The damped-FedAvg control
+    >   that separates them is x_h2_mechanism, on the anchor.
+
+    A IS NOT HERE. Its cell W is t3_algorithm_comparison's H1/H3 (banked, and
+    re-run for SCAFFOLD in x_scaffold_rerun) and its cell R is H2, which
+    x_h2_mechanism runs with checkpoints and the damped control. Adding a third
+    anchor block would buy nothing.
+    """
+    specs = []
+    for label in sorted(CALIBRATED):
+        methods = CALIBRATED[label]
+        block = next((b for b in _k10_blocks() if b[0] == label), None)
+        if block is None:
+            continue
+        _l, common, _ctrl_r5, rung_r5, _ckpt5 = block
+        ckpt = {"checkpoint_every": max(1, rung_r5 // 20),
+                "checkpoint_client_weights": True}
+        cell_w = {**_e_scaled({k: v for k, v in common.items()
+                               if k not in ("checkpoint_client_weights",
+                                            "checkpoint_every")},
+                              rung_r5, 5, 0), **ckpt}
+        cell_r, _why = RESCUE_CELLS[label]
+        for cell, arm in ((cell_w, "W"), (cell_r, "R")):
+            tags = {"tier": "T6", "group": "algo_comparison", "experiment": "algo",
+                    "setting": arm, "setup": label}
+            specs += expand_grid({**cell, "strategy": "fedavg"}, {"seed": SEEDS5},
+                                 tags={**tags, "algorithm": "fedavg"})
+            for strategy, kw in sorted(methods.items()):
+                specs += expand_grid({**cell, "strategy": strategy, **kw},
+                                     {"seed": SEEDS5},
+                                     tags={**tags, "algorithm": strategy})
+                below = HEDGE_BELOW.get(kw.get("server_lr")) if arm == "R" else None
+                if below is not None and strategy in ("fedadam", "fedyogi"):
+                    specs += expand_grid(
+                        {**cell, "strategy": strategy, **kw, "server_lr": below},
+                        {"seed": SEEDS3},
+                        tags={**tags, "algorithm": f"{strategy}_hedge"})
+    return specs
+
+
 BUILDERS = {
+    "t6_algo_comparison": t6_algo_comparison,
+    "x_scaffold_rerun": x_scaffold_rerun,
+    "t6_algo_calibration": t6_algo_calibration,
+    "t6_algo_calibration_c": t6_algo_calibration_c,
+    "x_h2_mechanism": x_h2_mechanism,
+    "x_b_decay_band_long": x_b_decay_band_long,
     "x_e50_long": x_e50_long,
     "t5_local_epochs": t5_local_epochs,
     "t5_participation": t5_participation,
@@ -3152,6 +3532,13 @@ BUILDERS = {
 # are ones that must never run again -- which is what its own error message says
 # force is for. One entry, with the reason:
 FORCE_REWRITE = {
+    "x_b_wd_zero_fl": (
+        "moves the federated wd=0 arm from alpha=0.30 to alpha=0.70 and adds the "
+        "matched wd ladder at 0.70. The six alpha=0.30 federated cells it used "
+        "to claim never ran: at that alpha wd=0 cannot grok at any budget "
+        "(RUNS_TODO entries 1-3), so they would have been a guaranteed null. "
+        "Its three centralized cells were x_controls' and stay banked there."
+    ),
     "x_d_alpha_high": (
         "drops the five alpha=1.0 cells. alpha is the TRAINING fraction, so 1.0 "
         "leaves no test set; compute_accuracy over zero samples returns NaN, and "
@@ -3179,7 +3566,7 @@ def main():
         # cells, FIFO in build order finishes in 16.7 h against 14.2 h
         # longest-first, because setup D's 6.2 h K=50 runs sit in the fifth
         # block and would start last.
-        if (name.startswith(("s5_", "x_", "p1_", "t5_"))
+        if (name.startswith(("s5_", "x_", "p1_", "t5_", "t6_"))
                 or name in ("t2_aggregation_alpha2", "t3a_dirichlet_setups")):
             specs = _longest_first(specs)
         path = os.path.join(MANIFEST_DIR, name + ".jsonl")

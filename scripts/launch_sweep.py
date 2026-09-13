@@ -55,8 +55,24 @@ def is_done(spec, results_root):
     return os.path.exists(result_path(spec, results_root))
 
 
-def launch(specs, gpus, per_gpu, results_root, histories_root, poll_s=1.0):
-    """Run `specs` across `gpus`, `per_gpu` concurrent runs per device."""
+def launch(specs, gpus, per_gpu, results_root, histories_root, poll_s=1.0,
+           stagger_s=3.0, logs_root=None):
+    """Run `specs` across `gpus`, `per_gpu` concurrent runs per device.
+
+    stagger_s: minimum gap between two run starts. Sixteen Ray heads started in
+    the same instant lost two of sixteen to worker-registration failures
+    (RUNS_TODO entry 6); a few seconds apart they do not.
+
+    logs_root: where each run's stdout goes. Defaults to results_root, which is
+    the historical behaviour. Point it at node-local or RAM-backed scratch when
+    the results filesystem is quota-bound: a run's log is 8-22 MB against a
+    result JSON's ~5 KB, so on a 387-run sweep the logs are ~4 GB of debug
+    output and the results are 2 MB. Only the JSON is evidence. A caller that
+    redirects logs off shared storage should copy back the logs of any FAILED
+    run before the allocation ends -- those are the ones worth keeping.
+    """
+    logs_root = logs_root or results_root
+    os.makedirs(logs_root, exist_ok=True)
     # A slot is one (gpu, lane). Slots are the unit of concurrency.
     slots = [gpu for gpu in gpus for _ in range(per_gpu)]
     n_slots = len(slots)
@@ -66,6 +82,10 @@ def launch(specs, gpus, per_gpu, results_root, histories_root, poll_s=1.0):
     done = failed = 0
     total = len(pending)
     t_start = time.time()
+    last_start = [0.0]
+
+    def log_path_of(spec):
+        return os.path.join(logs_root, spec["id"] + ".log")
 
     def free_slot():
         for i in range(n_slots):
@@ -76,6 +96,10 @@ def launch(specs, gpus, per_gpu, results_root, histories_root, poll_s=1.0):
     while pending or running:
         # Fill free slots.
         while pending and (slot := free_slot()) is not None:
+            gap = stagger_s - (time.time() - last_start[0])
+            if gap > 0:
+                time.sleep(gap)
+            last_start[0] = time.time()
             spec = pending.pop(0)
             gpu = slots[slot]
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu))
@@ -83,7 +107,7 @@ def launch(specs, gpus, per_gpu, results_root, histories_root, poll_s=1.0):
                    "--spec", json.dumps(spec),
                    "--results-root", results_root,
                    "--histories-root", histories_root]
-            log_path = os.path.join(results_root, spec["id"] + ".log")
+            log_path = os.path.join(logs_root, spec["id"] + ".log")
             os.makedirs(results_root, exist_ok=True)
             logf = open(log_path, "w")
             proc = subprocess.Popen(cmd, env=env, stdout=logf,
@@ -104,7 +128,7 @@ def launch(specs, gpus, per_gpu, results_root, histories_root, poll_s=1.0):
                 tag = "done"
             else:
                 failed += 1
-                tag = f"FAIL rc={proc.returncode} (see {spec['id']}.log)"
+                tag = f"FAIL rc={proc.returncode} (see {log_path_of(spec)})"
             print(f"[gpu {slots[slot]}] {tag} {spec['id']}  "
                   f"{dt:.0f}s  [{done} ok / {failed} fail / {total}]")
             del running[slot]
@@ -131,6 +155,11 @@ def main():
                         help="Re-run even if a result JSON already exists")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would run and exit")
+    parser.add_argument("--logs-root", default=None,
+                        help="Where per-run stdout goes (default: --results-root). "
+                             "Use node-local scratch when results storage is quota-bound.")
+    parser.add_argument("--stagger-s", type=float, default=3.0,
+                        help="Minimum seconds between two run starts (default 3)")
     args = parser.parse_args()
 
     specs = load_manifest(args.manifest)
@@ -167,7 +196,8 @@ def main():
         return
 
     _done, failed = launch(todo, gpus, args.per_gpu, args.results_root,
-                           args.histories_root)
+                           args.histories_root, stagger_s=args.stagger_s,
+                           logs_root=args.logs_root)
     # Exit non-zero if anything failed. A sweep is normally detached with
     # `setsid nohup ... &`, so the status line in the log is the only signal --
     # and exiting 0 after 60 failed runs reads as a clean sweep to anything

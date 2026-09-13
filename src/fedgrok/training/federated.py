@@ -265,6 +265,56 @@ def _fit_config_to_cfg(config: dict) -> FedConfig:
     return FedConfig(**kwargs)
 
 
+def validate_strategy_config(cfg: FedConfig):
+    """Reject strategy configurations that would run and bank wrong numbers.
+
+    Called at the top of fed_train as well as from _build_strategy: inside
+    Flower the strategy is built on the ServerApp thread, where a ValueError
+    surfaces as an opaque "Exception in ServerApp thread" after Ray has
+    started. Failing before that keeps the message readable and the sweep log
+    honest.
+    """
+    if cfg.strategy != "scaffold":
+        return
+    if cfg.scaffold_option not in (1, 2):
+        raise ValueError(f"scaffold_option must be 1 or 2, got {cfg.scaffold_option!r}")
+    # SCAFFOLD's Option-II control variate is c_i+ = c_i - c + (x - y_i)/(eta*K),
+    # which inverts x - y_i = eta * sum(g). That identity holds for SGD. Under
+    # AdamW the update is eta * sum(m_hat / (sqrt(v_hat) + eps)) plus decoupled
+    # decay, so dividing by eta*K recovers a per-coordinate PRECONDITIONED sum,
+    # not the gradient sum -- the resulting c_i is wrong by a factor that varies
+    # per coordinate. It would still produce plausible numbers, and SCAFFOLD is
+    # the load-bearing "is drift the mechanism?" arm, so fail loudly instead.
+    # Option I accumulates the gradients themselves and is valid under any
+    # local optimiser; it is the estimator the AdamW setups have to use.
+    if cfg.optimizer == "adamw" and cfg.scaffold_option != 1:
+        raise ValueError(
+            "SCAFFOLD Option II is not valid with optimizer='adamw': its "
+            "control-variate estimator (x - y_i)/(lr * n_steps) assumes SGD, so "
+            "under Adam's per-coordinate preconditioning c_i is systematically "
+            "wrong. Set scaffold_option=1 (mean local gradient), which is "
+            "unbiased under any optimiser, or use optimizer='gd'."
+        )
+
+
+def enable_deterministic_kernels():
+    """Ask PyTorch for deterministic kernels where a choice exists.
+
+    warn_only: an op with no deterministic implementation warns once instead
+    of raising -- a sweep must not die on a kernel-selection detail. Together
+    with the cuBLAS workspace pin in fedgrok/__init__ and cid-ordered
+    aggregation this is what makes two runs of one spec identical. Called in
+    the driver and in every client actor (the actors are separate processes).
+    """
+    # Belt and braces for the client actors: the package-level setdefault runs
+    # in whichever process imports fedgrok, and an actor imports it before its
+    # first CUDA call, but a stray early CUDA init would silently lose the pin.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.benchmark = False
+
+
 def _shuffle_seed(seed: int, partition_id: int, server_round: int) -> int:
     """Deterministic seed for one client's minibatch shuffle in one round.
 
@@ -298,6 +348,7 @@ class GrokClient(NumPyClient):
     def fit(self, parameters, config):
         cfg = _fit_config_to_cfg(config)
         device = _client_device()
+        enable_deterministic_kernels()
 
         # Warm model + on-device data (built once per client, reused each round).
         # y_local_target is one-hot (MSE) or class indices (CE) per the loss.
@@ -334,8 +385,15 @@ class GrokClient(NumPyClient):
             from fedgrok.training import scaffold as _sc
             shapes = [w.shape for w in parameters]
             server_cv = _sc._cv_from_bytes(scaffold_cv_bytes, shapes)
-            cv_key = _client_key(cfg, self.partition_id)
-            client_cv = _sc.get_client_cv(cv_key, parameters)
+            # c_i comes from the server (ScaffoldStrategy.configure_fit); it is
+            # absent on this partition's first round, when c_i = 0.
+            ci_bytes = config.get("scaffold_ci")
+            client_cv = (_sc._cv_from_bytes(ci_bytes, shapes) if ci_bytes is not None
+                         else _sc.zeros_like_params(parameters))
+            # Option I accumulates the raw local gradients; Option II needs
+            # nothing during the steps (it reads x - y_i afterwards).
+            grad_acc = ([torch.zeros_like(p) for p in model.parameters()]
+                        if cfg.scaffold_option == 1 else None)
 
         def _step(xb, yb):
             """One gradient step on a batch (+ FedProx / SCAFFOLD corrections)."""
@@ -349,6 +407,13 @@ class GrokClient(NumPyClient):
             optimizer.zero_grad()
             loss.backward()
             if scaffold:
+                if grad_acc is not None:
+                    # Before the correction: c_i estimates the client's own
+                    # gradient, not the corrected direction it stepped along.
+                    with torch.no_grad():
+                        for acc, p in zip(grad_acc, model.parameters()):
+                            if p.grad is not None:
+                                acc.add_(p.grad)
                 _sc.apply_correction(model, server_cv, client_cv)
             optimizer.step()
 
@@ -414,7 +479,10 @@ class GrokClient(NumPyClient):
                                and server_round % ckpt_every == 0)
 
         metrics_dict = {"loss": local_loss, "accuracy": local_acc, "drift": drift,
-             "weight_norm": weight_norm, "ipr": local_ipr}
+             "weight_norm": weight_norm, "ipr": local_ipr,
+             # The server sorts results by this (aggregation_order="cid") and
+             # keys SCAFFOLD's c_i on it; a Flower cid is a random node id.
+             "partition_id": int(self.partition_id)}
         if config.get("checkpoint_client_weights", False) and is_checkpoint_round:
             sig_name, sig = client_signature(model, cfg)
             if sig is None:
@@ -438,11 +506,15 @@ class GrokClient(NumPyClient):
         # server can update c. lr is the local learning rate; n_steps the number
         # of local gradient steps actually taken (full-batch or minibatch).
         if scaffold:
-            new_cv, delta_cv = _sc.client_cv_update(
-                parameters, updated_weights, server_cv, client_cv,
-                lr=cfg.lr, n_steps=n_steps,
-            )
-            _sc.set_client_cv(cv_key, new_cv)
+            if grad_acc is not None:
+                grad_mean = [(acc / max(1, n_steps)).cpu().numpy()
+                             for acc in grad_acc]
+                new_cv, delta_cv = _sc.client_cv_update_option1(grad_mean, client_cv)
+            else:
+                new_cv, delta_cv = _sc.client_cv_update(
+                    parameters, updated_weights, server_cv, client_cv,
+                    lr=cfg.lr, n_steps=n_steps,
+                )
             metrics_dict["scaffold_dc"] = _sc._cv_bytes(delta_cv)
 
         return (
@@ -482,40 +554,38 @@ def _build_strategy(cfg, init_params, evaluate_fn, fit_metrics_aggregation_fn=No
     if fit_metrics_aggregation_fn is not None:
         common_kwargs["fit_metrics_aggregation_fn"] = fit_metrics_aggregation_fn
 
+    # Every strategy aggregates in cid order unless the config opts out. The
+    # subclasses are built here rather than at import so FedAvg, FedAdam, ... are
+    # still the stock Flower classes everywhere else (tests, isinstance checks).
+    sort_results = cfg.aggregation_order != "arrival"
+
+    def _sorted(cls):
+        from fedgrok.training.scaffold import _SortedResultsMixin
+        return type(f"Sorted{cls.__name__}", (_SortedResultsMixin, cls),
+                    {"sort_results": sort_results})
+
     if cfg.strategy == "scaffold":
-        # SCAFFOLD's Option-II control variate is c_i+ = c_i - c + (x - y_i)/(eta*K),
-        # which inverts x - y_i = eta * sum(g). That identity holds for SGD. Under
-        # AdamW the update is eta * sum(m_hat / (sqrt(v_hat) + eps)) plus decoupled
-        # decay, so dividing by eta*K recovers a per-coordinate PRECONDITIONED sum,
-        # not the gradient sum -- the resulting c_i is wrong by a factor that varies
-        # per coordinate. It would still produce plausible numbers, and SCAFFOLD is
-        # the load-bearing "is drift the mechanism?" arm, so fail loudly instead.
-        if cfg.optimizer == "adamw":
-            raise ValueError(
-                "SCAFFOLD is not valid with optimizer='adamw': its control-variate "
-                "estimator (x - y_i)/(lr * n_steps) assumes SGD, so under Adam's "
-                "per-coordinate preconditioning c_i is systematically wrong. Use "
-                "optimizer='gd', or compare drift correction with FedProx, whose "
-                "proximal term makes no such assumption."
-            )
+        validate_strategy_config(cfg)
         from fedgrok.training.scaffold import ScaffoldStrategy
-        return ScaffoldStrategy(
+        strategy = ScaffoldStrategy(
             **common_kwargs,
             server_cv_box=scaffold_ctx["server_cv_box"],
             num_total_clients=cfg.num_clients,
             param_shapes=scaffold_ctx["param_shapes"],
         )
+        strategy.sort_results = sort_results
+        return strategy
 
     if cfg.strategy == "fedadam":
         # Server-side adaptive optimiser (Adam) on the pseudo-gradient.
-        return FedAdam(**common_kwargs, eta=cfg.server_lr, tau=cfg.tau)
+        return _sorted(FedAdam)(**common_kwargs, eta=cfg.server_lr, tau=cfg.tau)
     if cfg.strategy == "fedyogi":
         # Server-side Yogi — Adam's sign-based sibling; often stronger than Adam.
-        return FedYogi(**common_kwargs, eta=cfg.server_lr, tau=cfg.tau)
+        return _sorted(FedYogi)(**common_kwargs, eta=cfg.server_lr, tau=cfg.tau)
     if cfg.strategy == "fedavgm":
         # Server-side heavy-ball momentum on the pseudo-gradient. This IS
         # DiLoCo's outer optimiser, so it bridges to the local-SGD-at-scale line.
-        return FedAvgM(
+        return _sorted(FedAvgM)(
             **common_kwargs,
             server_learning_rate=cfg.server_lr,
             server_momentum=cfg.server_momentum,
@@ -523,7 +593,7 @@ def _build_strategy(cfg, init_params, evaluate_fn, fit_metrics_aggregation_fn=No
     # "fedavg" and "fedprox" both use the plain FedAvg strategy; FedProx's
     # proximal term is applied client-side in GrokClient.fit().
     if cfg.strategy in ("fedavg", "fedprox"):
-        return FedAvg(**common_kwargs)
+        return _sorted(FedAvg)(**common_kwargs)
 
     # Anything else is a mistake, and it must not be a silent one. This used to
     # fall through to FedAvg, so `strategy="feddyn"` -- which FedConfig's Literal
@@ -544,6 +614,8 @@ def _build_strategy(cfg, init_params, evaluate_fn, fit_metrics_aggregation_fn=No
 def fed_train(cfg: FedConfig):
     """Run FedAvg via Flower simulation. Returns history dict and final model."""
     torch.manual_seed(cfg.seed)
+    validate_strategy_config(cfg)
+    enable_deterministic_kernels()
     device = get_device()
     print(f"Using device: {device}")
 
@@ -781,12 +853,12 @@ def fed_train(cfg: FedConfig):
     # round, so its own initial values are irrelevant — only the RNG order was).
     _eval_model_box[0] = _make_model(cfg).to(device)
 
-    # SCAFFOLD: server control variate c (starts at 0) + per-client c_i store,
-    # shared with the strategy and the on_fit_config closure via scaffold_ctx.
+    # SCAFFOLD: server control variate c (starts at 0), shared with the
+    # strategy and the on_fit_config closure via scaffold_ctx; the c_i live in
+    # the strategy, keyed by partition.
     scaffold_ctx = None
     if cfg.strategy == "scaffold":
         from fedgrok.training import scaffold as _sc
-        _sc.reset_client_cv()
         scaffold_ctx = {
             "server_cv_box": [_sc.zeros_like_params(init_ndarrays)],
             "param_shapes": [a.shape for a in init_ndarrays],

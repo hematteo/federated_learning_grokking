@@ -1,0 +1,814 @@
+\documentclass{article}
+
+% ICLR 2025 style approximation
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage[table]{xcolor}
+\usepackage[font=small]{caption}
+\usepackage{subcaption}
+\usepackage{natbib}
+\usepackage{microtype}
+\usepackage{multirow}
+
+\definecolor{grokgreen}{HTML}{2E8B57}
+\definecolor{nogrokred}{HTML}{CC3333}
+\definecolor{rescueblue}{HTML}{2196F3}
+
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\setlist[itemize]{topsep=2pt,itemsep=1pt,parsep=0pt}
+\setlist[enumerate]{topsep=2pt,itemsep=1pt,parsep=0pt}
+
+\title{Grokking Survives Federated Averaging: \\
+Phase Boundaries, Aggregation Rescue, and Mechanistic Analysis}
+
+\author{
+  Author A \quad Author B \quad Author C \\
+  MPhil in Machine Learning, Speech and Language Technology \\
+  University of Cambridge \\
+  \texttt{\{crsid1, crsid2, crsid3\}@cam.ac.uk}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+% ABSTRACT
+% ============================================================
+\begin{abstract}
+Grokking---the phenomenon where neural networks generalise long after memorising the training set---has been extensively studied in centralised settings.
+We ask whether grokking survives \emph{federated learning}, where data is distributed across clients and only model updates are aggregated.
+Reproducing the setup of \citet{gromov2023grokking} (two-layer MLP with quadratic activations on modular addition), we first establish the centralised grokking phase boundary at a critical training fraction $\alpha_c \approx 0.198$, with grokking time following a power-law divergence $T_{\mathrm{grok}} \propto (\alpha - \alpha_c)^{-0.99}$.
+We then conduct over 700 federated training runs across a systematic grid of client counts ($K \in \{2, \ldots, 97\}$), data heterogeneity levels (Dirichlet and structured partitions), and optimisation parameters.
+Our main finding is that \textbf{FedAvg aggregation rescues grokking}: in 23 of 24 above-boundary configurations, each client holds data far below the centralised grokking threshold, yet the federated model groks---while a centralised model on the same per-client data never does.
+The overhead is modest ($<1.2\times$ slowdown for $K \leq 20$), and heterogeneity delays but does not prevent grokking.
+Mechanistic analysis reveals that (i) Fourier feature crystallisation precedes client drift reduction in 100\% of runs, (ii) accuracy, IPR, and drift collapse onto universal curves under time rescaling, and (iii) federation disrupts generalisation timing but not memorisation, identifying a two-timescale separation.
+These results demonstrate that grokking is a property of the loss landscape geometry rather than the optimisation path.
+\end{abstract}
+
+
+% ============================================================
+% 1. INTRODUCTION
+% ============================================================
+\section{Introduction}
+\label{sec:intro}
+
+\emph{Grokking} refers to the puzzling phenomenon where neural networks first memorise a training set, then---after prolonged additional training---suddenly generalise to unseen data \citep{power2022grokking}.
+The effect is most cleanly demonstrated on algorithmic tasks such as modular arithmetic, where \citet{gromov2023grokking} showed that a two-layer MLP with quadratic activation learns periodic Fourier features that explain the generalisation jump.
+The emergence of these features is governed by a phase transition: below a critical training fraction $\alpha_c$, the network memorises but never generalises; above it, grokking occurs after a delay that diverges as $\alpha \to \alpha_c^+$.
+
+Meanwhile, \emph{federated learning} (FL) has become the dominant paradigm for privacy-preserving distributed training \citep{mcmahan2017communication, kairouz2021advances}.
+In FL, data remains on clients; only model updates are aggregated by a central server.
+This introduces several perturbations absent from centralised training: data fragmentation across clients, statistical heterogeneity in local distributions, client drift from multiple local gradient steps, and partial participation.
+Each of these could plausibly disrupt the delicate phase transition underlying grokking.
+
+We investigate a simple but fundamental question: \textbf{does grokking survive federated averaging?}
+If it does, this implies that the grokking mechanism is robust to substantial perturbations in the optimisation process.
+If it does not, the failure mode reveals which aspects of the loss landscape or optimisation dynamics are essential.
+
+Our contributions: (1)~We establish the centralised phase boundary at $\alpha_c \approx 0.198$ with power-law scaling $T_{\mathrm{grok}} \propto (\alpha - \alpha_c)^{-0.99}$ (\S\ref{sec:boundary}).
+(2)~In 270 controlled runs, FedAvg groks where per-client data is individually below threshold---aggregation is the sole rescue mechanism (\S\ref{sec:aggregation}).
+(3)~Across 147 runs with Dirichlet and structured partitions, heterogeneity delays grokking by up to 37\% near the boundary but does not shift $\alpha_c$ (\S\ref{sec:heterogeneity}).
+(4)~Mechanistic analysis of 237 runs reveals that Fourier features crystallise before clients align, observables collapse onto universal curves, and FL selectively disrupts generalisation while preserving memorisation (\S\ref{sec:mechanistic}).
+
+
+% ============================================================
+% 2. BACKGROUND
+% ============================================================
+\section{Background and Related Work}
+\label{sec:background}
+
+\paragraph{Grokking.}
+\citet{power2022grokking} first demonstrated grokking on modular arithmetic.
+\citet{gromov2023grokking} showed that a minimal 2-layer MLP with quadratic activation suffices, driven by the emergence of periodic Fourier modes, and characterised grokking as a phase transition controlled by the training fraction $\alpha$.
+Weight decay \citep{liu2022omnigrok} and representation structure \citep{nanda2023progress} have been identified as key mechanisms; the connection to phase transitions was formalised by \citet{thilak2022slingshot}.
+
+\paragraph{Federated learning.}
+FedAvg \citep{mcmahan2017communication} trains a shared model by averaging locally-updated models.
+Key challenges include client drift \citep{karimireddy2020scaffold}, non-IID data \citep{li2020federated}, and partial participation; FedProx \citep{li2020fedprox} adds a proximal regulariser to mitigate drift.
+To our knowledge, no prior work has studied grokking under federated learning.
+
+
+% ============================================================
+% 3. EXPERIMENTAL SETUP
+% ============================================================
+\section{Experimental Setup}
+\label{sec:setup}
+
+\paragraph{Task and model.}
+We study modular addition $(a + b) \bmod p$ with $p = 97$, following \citet{gromov2023grokking}.
+The input is a one-hot encoding of $(a, b)$ (dimension $2p = 194$); the output is a distribution over $p$ classes.
+We use GrokNet: a two-layer MLP with no biases and quadratic activation $\phi(h) = h^2$, with mean-field initialisation ($W_1 \sim \mathcal{N}(0, 1/D)$, $W_2 \sim \mathcal{N}(0, 1/N^2)$).
+The loss is MSE on one-hot targets.
+Hidden width is $N = 256$ (validated in preliminary experiments; \S\ref{sec:boundary}).
+
+\paragraph{Training.}
+All training uses full-batch gradient descent ($\mathrm{lr} = 50$, no weight decay, no momentum).
+Each gradient step processes the entire (local) dataset, so ``epoch'' and ``gradient step'' are synonymous.
+We use three seeds (42, 123, 456) and report mean $\pm$ std.
+
+\paragraph{Federated protocol.}
+We use Flower \citep{beutel2020flower} with FedAvg.
+Default parameters: $K = 5$ clients, $E = 5$ local epochs per round, full participation ($f = 1.0$).
+Unless otherwise stated, FL budgets are $S_{\max} = 50{,}000$ gradient steps.
+
+\paragraph{Data partitioning.}
+We study four partition strategies:
+(i) \textbf{IID}: random equal shards;
+(ii) \textbf{Operand}: client $i$ receives samples where $a \bmod K = i$;
+(iii) \textbf{Target}: client $i$ receives samples where $(a+b) \bmod K = i$;
+(iv) \textbf{Dirichlet}: label-skewed allocation controlled by concentration $\alpha_{\mathrm{dir}}$ (higher $= $ more IID).
+
+\paragraph{Metrics.}
+\begin{itemize}
+  \item $T_{\mathrm{grok}}$: smallest step where test accuracy $\geq 95\%$ and never drops below (``grokking step'').
+  \item $T_{50}$: first step where test accuracy $\geq 50\%$ (onset of generalisation).
+  \item $T_{\mathrm{memo}}$: first step where train accuracy $\geq 99\%$ (memorisation).
+  \item \textbf{IPR} (Inverse Participation Ratio): measures concentration of Fourier structure in $W_1$; rises from ${\sim}0.02$ (random) to ${\sim}0.35$--$0.48$ during grokking.
+  \item \textbf{Client drift}: mean $\|w_{\mathrm{after}} - w_{\mathrm{before}}\|_F$ across clients per round.
+\end{itemize}
+
+
+% ============================================================
+% 4. CENTRALISED PHASE BOUNDARY
+% ============================================================
+\section{Centralised Phase Boundary}
+\label{sec:boundary}
+
+We first establish the centralised grokking phase boundary to serve as the reference for all FL experiments.
+We validate that hidden width $N = 256$ supports grokking across the $\alpha$ range (all four tested widths $N \in \{100, 128, 200, 256\}$ produce nearly identical $T_{\mathrm{grok}}$; width is not a confound).
+
+\paragraph{Phase boundary.}
+Sweeping $\alpha \in \{0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5\}$ at $S_{\max} = 100{,}000$ steps reveals a sharp transition (Table~\ref{tab:exp1}): $\alpha \leq 0.2$ shows no grokking (test accuracy $< 7\%$), while $\alpha \geq 0.3$ groks with 3/3 seeds.
+Extended runs to $10^6$ steps reveal that $\alpha = 0.2$ \emph{does} eventually grok ($T_{\mathrm{grok}} = 805{,}000$), placing the true critical point below $0.2$.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Centralised phase boundary. $T_{\mathrm{grok}}$ diverges as $\alpha \to \alpha_c^+$.}
+\label{tab:exp1}
+\begin{tabular}{lcrrc}
+\toprule
+$\alpha$ & $n_{\mathrm{train}}$ & $T_{\mathrm{grok}}$ (mean $\pm$ std) & Final acc (\%) & Final IPR \\
+\midrule
+0.10  &    940 & $\infty$ &   0.5 & 0.021 \\
+0.15  & 1{,}411 & $\infty$ &   0.6 & 0.022 \\
+0.20  & 1{,}881 & $805{,}000^{\dagger}$ & 98.7 & 0.253 \\
+0.22  & 2{,}069 & $59{,}000$ & 100.0 & --- \\
+0.25  & 2{,}352 & $24{,}000$ & 100.0 & --- \\
+0.30  & 2{,}822 & $12{,}833 \pm 404$  & 100.0 & 0.472 \\
+0.50  & 4{,}704 & $7{,}667 \pm 115$   & 100.0 & 0.484 \\
+\bottomrule
+\multicolumn{5}{l}{\footnotesize $\dagger$ Extended to $10^6$ steps; single seed.}
+\end{tabular}
+\end{table}
+
+\paragraph{Critical scaling.}
+Fine-grained runs at $\alpha \in \{0.20, 0.21, 0.22, 0.25, 0.28, 0.30, 0.50\}$ reveal a power-law divergence:
+\begin{equation}
+  T_{\mathrm{grok}} \propto (\alpha - \alpha_c)^{-\gamma}, \qquad
+  \alpha_c \approx 0.198, \quad \gamma \approx 0.99, \quad R^2 = 0.978.
+  \label{eq:scaling}
+\end{equation}
+The exponent $\gamma \approx 1$ means $T_{\mathrm{grok}}$ is roughly inversely proportional to the distance from criticality.
+Adding just 94 training samples ($\alpha: 0.20 \to 0.21$) cuts $T_{\mathrm{grok}}$ by $5\times$.
+This is consistent with a second-order phase transition: no discontinuity in the order parameter (test accuracy at fixed time), only a diverging timescale.
+
+\paragraph{Mechanistic picture.}
+All $\alpha$ values traverse the same dynamical path through (IPR, test accuracy) space---grokking is a universal process; $\alpha$ only controls the clock speed.
+The network memorises first (train loss drops, IPR stays flat), then reorganises weights into Fourier structure.
+Less data produces a weaker gradient signal for the periodic solution, explaining the critical slowdown.
+
+
+% ============================================================
+% 5. AGGREGATION RESCUES GROKKING
+% ============================================================
+\section{Aggregation Rescues Grokking}
+\label{sec:aggregation}
+
+\paragraph{Experimental design.}
+The central question: each FL client holds only $n/K$ samples---often far below $\alpha_c$.
+Does FedAvg aggregation recover grokking?
+For every $(\alpha, K)$ pair with $\alpha \in \{0.20, 0.25, 0.30, 0.35, 0.50\}$ and $K \in \{2, 5, 10, 20, 50, 97\}$, we run three matched conditions (3 seeds each, 270 runs total):
+\begin{enumerate}[nosep]
+  \item \textbf{Centralised-full}: trained on all $n_{\mathrm{train}}$ samples (ceiling).
+  \item \textbf{Centralised-reduced}: trained on $n_{\mathrm{train}}/K$ samples (floor---what one client could achieve alone).
+  \item \textbf{FL IID}: $K$ clients with $n_{\mathrm{train}}/K$ samples each, FedAvg.
+\end{enumerate}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_phase_diagram.png}
+\caption{Phase diagram in $(\alpha, K)$ space. \textbf{Gray}: below centralised boundary ($\alpha = 0.2$). \textbf{\textcolor{rescueblue}{Blue}}: FL groks but centralised-reduced does not (aggregation rescues). \textbf{Green}: both grok. \textbf{Red}: neither groks.
+Aggregation rescues grokking across the vast majority of the grid.}
+\label{fig:exp2_phase}
+\end{figure}
+
+\paragraph{Headline result (Figure~\ref{fig:exp2_phase}).}
+FedAvg groks in \textbf{23 of 24 above-boundary cells}, even though per-client data is individually below $\alpha_c$.
+A centralised model on the same per-client data ($\alpha_{\mathrm{eff}} = \alpha/K$) never groks in any of these cells.
+Aggregation is not merely helpful---it is \emph{necessary}: without it, the model never generalises.
+
+\paragraph{Quantifying the overhead (Table~\ref{tab:exp2}).}
+The slowdown ratio $T_{\mathrm{grok}}^{\mathrm{FL}} / T_{\mathrm{grok}}^{\mathrm{cent}}$ reveals three regimes: (i) for $K \leq 20$, the overhead is $< 1.2\times$ at all $\alpha$; (ii) at $K = 50$, a moderate $1.01$--$1.17\times$; (iii) at $K = 97$, a significant $1.04$--$2.14\times$, with FL breaking at low $\alpha$.
+At $\alpha = 0.5$, FL has essentially zero overhead even at $K = 97$ ($1.04\times$).
+
+\begin{table}[t]
+\centering
+\small
+\caption{FL grokking time and slowdown ratio across the $(\alpha, K)$ grid. Gray: below centralised boundary.}
+\label{tab:exp2}
+\begin{tabular}{ccrrr}
+\toprule
+$\alpha$ & $K$ & $T_{\mathrm{grok}}^{\mathrm{cent}}$ & $T_{\mathrm{grok}}^{\mathrm{FL}}$ & Ratio \\
+\midrule
+\rowcolor{gray!15} 0.20 & 2--97 & $\infty$ & $\infty$ & --- \\
+\midrule
+0.25 &  2 & $25{,}133$ & $25{,}263$ & $1.01\times$ \\
+0.25 & 20 & $25{,}133$ & $29{,}987$ & $1.19\times$ \\
+\rowcolor{nogrokred!10} 0.25 & 97 & $25{,}133$ & $\infty$ & --- \\
+\midrule
+0.30 &  2 & $12{,}833$ & $12{,}822$ & $1.00\times$ \\
+0.30 & 50 & $12{,}833$ & $15{,}048$ & $1.17\times$ \\
+0.30 & 97 & $12{,}833$ & $27{,}422$ & $2.14\times$ \\
+\midrule
+0.50 &  2 & $7{,}667$ & $7{,}632$ & $1.00\times$ \\
+0.50 & 97 & $7{,}667$ & $7{,}945$ & $1.04\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Mechanistic preservation.}
+Phase portraits (IPR vs.\ test accuracy) confirm that FL follows the same mechanistic pathway as centralised training: the same S-curve in representation space, the same Fourier solution, at roughly the same speed.
+FL does not find a different solution---it finds the same solution via a noisier route.
+
+\paragraph{Client drift dynamics.}
+Client drift peaks precisely at the grokking transition, then drops sharply as all clients converge to the Fourier solution.
+At the fragmentation limit ($\alpha{=}0.25, K{=}97$), drift grows without bound and the system never finds the attractor.
+This drift--grokking interplay is analysed mechanistically in \S\ref{sec:mechanistic}.
+
+
+% ============================================================
+% 6. ROBUSTNESS TO HETEROGENEITY
+% ============================================================
+\section{Robustness to Heterogeneity}
+\label{sec:heterogeneity}
+
+We now test whether data heterogeneity---a central challenge in FL---shifts the grokking phase boundary.
+
+\paragraph{Exp 3a: Dirichlet sweep.}
+We sweep $\alpha_{\mathrm{dir}} \in \{0.01, 0.1, 0.5, 1.0, 10.0, 1000.0\}$ (extreme non-IID to IID) at $K = 10$ (Table~\ref{tab:exp3a}).
+
+\begin{table}[t]
+\centering
+\small
+\caption{Dirichlet heterogeneity sweep ($K{=}10$, mean $T_{\mathrm{grok}}$, 3 seeds).}
+\label{tab:exp3a}
+\begin{tabular}{lcccc}
+\toprule
+$\alpha$ & $\alpha_{\mathrm{dir}}{=}0.01$ & $0.1$ & $1000$ (IID) & Slowdown \\
+\midrule
+0.20 & $\infty$ & $\infty$ & $\infty$ & --- \\
+0.25 & $36{,}638$ & $29{,}497$ & $26{,}725$ & 1.37$\times$ \\
+0.30 & $14{,}448$ & $13{,}690$ & $13{,}072$ & 1.11$\times$ \\
+0.50 & $7{,}738$ & $7{,}680$ & $7{,}642$ & 1.01$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The results are clear: \textbf{the phase boundary is unchanged}.
+At $\alpha = 0.2$, grokking fails at every heterogeneity level.
+At $\alpha \geq 0.25$, all 30 configurations (5 $\alpha_{\mathrm{dir}}$ $\times$ 6 $\alpha$) grok to 100\%.
+Heterogeneity delays grokking by up to 37\% at $\alpha = 0.25$ under extreme non-IID ($\alpha_{\mathrm{dir}} = 0.01$), but the effect vanishes in the interior ($<1.3\%$ at $\alpha = 0.5$).
+
+\paragraph{Exp 3b: Structured partitions.}
+Operand-based partitioning---which fragments the input space along the Fourier structure the model must learn---was hypothesised to be particularly disruptive.
+The data \textbf{does not support this hypothesis}: at $\alpha = 0.5$, all three partitions (IID, operand, target) yield statistically identical $T_{\mathrm{grok}}$ ($7{,}597$--$7{,}642$ steps).
+Near the boundary ($\alpha = 0.25$), operand is slightly \emph{faster} than IID ($0.965\times$), while target is slightly slower ($1.114\times$).
+The Fourier solution is learned through aggregation regardless of how the input space is divided.
+
+\paragraph{Mechanistic explanation.}
+The delay is explained by \textbf{weight growth retardation}: non-IID data slows weight norm growth by ${\sim}20$--$30\%$, delaying Fourier feature emergence.
+However, final weight magnitudes and IPR converge to the same values across all heterogeneity levels---drift delays grokking but does not degrade the solution (Appendix~\ref{app:anatomy}).
+
+
+% ============================================================
+% 7. MECHANISTIC ANALYSIS
+% ============================================================
+\section{Mechanistic Analysis}
+\label{sec:mechanistic}
+
+We perform a post-hoc analysis of 237 FL runs from Experiments 2--3 to understand \emph{why} grokking survives federation.
+Four findings emerge: (i) FL follows the same mechanistic pathway as centralised training; (ii) client drift predicts grokking delay independently of $\alpha$; (iii) Fourier features crystallise before clients align; and (iv) federation selectively disrupts generalisation while leaving memorisation invariant.
+
+\subsection{Same pathway, different speed}
+\label{sec:mech_pathway}
+
+Phase portraits plotting test accuracy against IPR (Figure~\ref{fig:phase_portrait}) reveal that centralised and FL runs trace the \textbf{same L-shaped trajectory} through (IPR, accuracy) space: the model memorises at low IPR, then accuracy jumps once IPR crosses ${\sim}0.12$.
+Across all tested $(\alpha, K)$ pairs, FL trajectories are indistinguishable from centralised ones---federation changes the speed along the attractor but not the attractor itself.
+
+Aligning 72 grokking runs to $T_{\mathrm{grok}} = 0$ confirms a \textbf{universal temporal fingerprint} (Appendix~\ref{app:fingerprint}): test accuracy follows a tight sigmoid; the generalisation gap peaks ${\sim}5{,}000$ steps before grokking; client drift follows an inverted-U; and IPR has risen substantially before the accuracy jump.
+The narrow interquartile range across runs spanning $K \in \{10, 20\}$, $\alpha_{\mathrm{dir}} \in \{0.01\text{--}1000\}$, and $\alpha \in \{0.25\text{--}0.5\}$ indicates these dynamics are intrinsic to the phase transition.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/exp2_phase_portrait.png}
+\caption{Phase portrait: test accuracy vs.\ IPR for centralised and FL IID runs. All trajectories follow the same L-shaped attractor. FL does not alter the pathway---only the speed.}
+\label{fig:phase_portrait}
+\end{figure}
+
+\subsection{Drift predicts grokking delay, controlling for $\alpha$}
+\label{sec:mech_drift}
+
+Naive correlation between drift and $T_{\mathrm{grok}}$ across all runs is $\rho = 0.70$ ($p = 1.6 \times 10^{-29}$), but this is confounded: 42 of 46 failed runs are at $\alpha = 0.2$, which fails centralised too.
+Within-$\alpha$ Spearman correlations reveal genuine signal: $\rho = 0.79$ at $\alpha = 0.25$ (strong), declining to $\rho = 0.34$ at $\alpha = 0.5$ (weak).
+At $\alpha = 0.3$ with IID partitioning, increasing $K$ from 2 to 97 monotonically increases both drift and $T_{\mathrm{grok}}$ ($\rho = 1.0$), establishing the causal chain $K \to \text{drift} \to T_{\mathrm{grok}}$.
+
+\subsection{Temporal ordering: features crystallise before clients align}
+\label{sec:mech_temporal}
+
+Does client consensus enable feature learning, or does feature learning drive consensus?
+For each of 72 grokking runs, we detect $T_{\mathrm{IPR\ onset}}$ (IPR exceeds $2.5\times$ baseline) and $T_{\mathrm{drift\ drop}}$ (drift falls below 50\% of peak).
+IPR onset precedes drift drop in \textbf{72 of 72 runs} (Figure~\ref{fig:temporal}a; Wilcoxon $p = 1.8 \times 10^{-13}$; median lag 10{,}775 steps), robust across all 12 threshold combinations (Figure~\ref{fig:temporal}d).
+The interpretation: the global model discovers periodic Fourier structure first; clients then converge because they are all being pulled toward the same solution.
+The Fourier attractor acts as a consensus-inducing fixed point.
+Temporal precedence does not establish causation---both could be driven by weight norm growth---but zero exceptions across 72 runs and 12 thresholds constrains alternatives.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/fig8_temporal_ordering.png}
+\caption{Temporal ordering of IPR rise and drift drop (72 grokking runs from Exp~3a). (a)~$T_{\mathrm{IPR\ onset}}$ vs.\ $T_{\mathrm{drift\ drop}}$: all points above the diagonal (IPR rises first in 72/72 runs). (b)~Lag histogram (median = 10{,}775 steps; Wilcoxon $p = 1.8 \times 10^{-13}$). (c)~Box plots showing both events precede $T_{\mathrm{grok}}$, with IPR onset leading. (d)~Robustness heatmap: 100\% IPR-first across all 12 threshold combinations.}
+\label{fig:temporal}
+\end{figure}
+
+\subsection{Scaling collapse}
+\label{sec:mech_collapse}
+
+Rescaling time as $\tau = (t - T_{\mathrm{grok}}) / (T_{\mathrm{grok}} - T_{50})$ across 117 grokking runs reveals approximate collapse (Figure~\ref{fig:collapse}).
+The accuracy collapse is partly tautological (any sigmoid collapses under centering and scaling), but the IPR and drift collapses are \textbf{non-trivial}: IPR begins rising at $\tau \approx -3$; normalised drift peaks at $\tau \approx -2$.
+Since neither was used in the rescaling, their collapse is evidence of a \textbf{single intrinsic timescale} governing the transition.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/fig9_universal_collapse.png}
+\caption{Scaling collapse (117 runs). (a)~Raw trajectories. (b)~Rescaled accuracy. (c)~IPR collapse: features emerge at $\tau \approx -3$. (d)~Drift collapse: peaks at $\tau \approx -2$. Black: median; shading: IQR.}
+\label{fig:collapse}
+\end{figure}
+
+\subsection{Two-timescale separation}
+\label{sec:mech_timescales}
+
+Decomposing grokking into memorisation ($T_{\mathrm{memo}}$) and generalisation ($T_{\mathrm{grok}}$) reveals a striking asymmetry (Figure~\ref{fig:two_timescales}):
+$T_{\mathrm{memo}}$ is invariant to $K$ ($\pm 1\%$ from $K{=}2$ to $K{=}50$), while $T_{\mathrm{grok}}$ varies by up to $2.1\times$ (CV $4\times$ higher at $\alpha{=}0.25$).
+Memorisation requires only that each client overfit its local shard; generalisation requires the global model to discover the Fourier solution via the aggregated gradient signal.
+Client drift specifically prolongs the generalisation delay $\Delta T = T_{\mathrm{grok}} - T_{\mathrm{memo}}$ (within-$\alpha$ $\rho \approx 0.73$ at $\alpha{=}0.25$).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/fig10_two_timescales.png}
+\caption{FL disrupts generalisation, not memorisation. (a)~Within-$\alpha$ CV: $T_{\mathrm{grok}}$ up to $4\times$ more variable than $T_{\mathrm{memo}}$. (b)~$T_{\mathrm{memo}}$ (dashed, flat) vs.\ $T_{\mathrm{grok}}$ (solid, diverging) vs.\ $K$. (c)~Generalisation delay $\Delta T$ vs.\ mean client drift, with within-$\alpha$ Spearman correlations.}
+\label{fig:two_timescales}
+\end{figure}
+
+
+% ============================================================
+% 8. DISCUSSION
+% ============================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Grokking is a property of the loss landscape.}
+Our central finding is that grokking survives substantial perturbations to the optimisation process: data fragmented across up to 97 clients, non-IID distributions, partial participation, and extreme local epochs.
+The mechanistic evidence is multi-layered: identical phase portraits (\S\ref{sec:mech_pathway}), Fourier features driving client consensus (\S\ref{sec:mech_temporal}), and universal scaling collapse (\S\ref{sec:mech_collapse}).
+
+\paragraph{Aggregation as gradient signal amplification.}
+Each client's gradient signal for the Fourier solution is individually below threshold, but averaging $K$ signals amplifies the collective signal---analogous to signal averaging in communications.
+The two-timescale separation (\S\ref{sec:mech_timescales}) reveals that aggregation does not help memorisation (which occurs locally) but restores the collective signal needed for the Fourier solution.
+The Fourier solution itself acts as a \emph{consensus-inducing fixed point}: once periodic features begin crystallising, local gradients align across clients, explaining why drift drops after IPR rises.
+
+\paragraph{Implications for FL practice.}
+FedProx's proximal term directly opposes the weight norm growth required for grokking: at $\mu = 0.01$, norms are capped and grokking fails (Appendix~\ref{app:fedprox}).
+This reveals a tension between drift-reduction algorithms and beneficial weight dynamics.
+Conversely, grokking is robust to extreme local epochs ($E{=}200$ still groks) and partial participation ($f{=}0.2$ caps accuracy at ${\sim}94\%$ but the transition still occurs; Appendix~\ref{app:stress}).
+
+\paragraph{Limitations.}
+Restricted to a single architecture (2-layer MLP), activation (quadratic), task (modular addition), and loss (MSE).
+We do not save model checkpoints, preventing per-client Fourier spectral analysis.
+The temporal ordering establishes precedence, not causation.
+All experiments use full-batch training.
+
+
+% ============================================================
+% 10. CONCLUSION
+% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented the first systematic study of grokking under federated learning.
+Through over 700 training runs spanning client counts, data heterogeneity, optimisation parameters, and FL algorithms, we demonstrate that grokking is remarkably robust to federation.
+The grokking phase boundary $\alpha_c \approx 0.198$ is unchanged by federated training, and FedAvg aggregation rescues grokking in configurations where per-client data is individually far below the grokking threshold.
+
+Our mechanistic analysis reveals that grokking under FL follows the same dynamical pathway as centralised training---identical phase portraits, universal temporal fingerprints, and scaling collapse of accuracy, IPR, and drift onto shared curves.
+The Fourier solution acts as a consensus-inducing attractor: its crystallisation precedes client alignment in 100\% of runs, and the generalisation timescale is selectively stretched by client drift while memorisation remains invariant.
+This multi-layered mechanistic evidence paints a consistent picture: grokking is fundamentally a property of the loss landscape geometry, not the optimisation path.
+
+We hope this work opens several directions: studying grokking under more realistic FL settings (cross-silo with natural data), understanding the aggregation-as-amplification mechanism theoretically, investigating whether per-client Fourier spectra converge to the same modes or merely the same IPR, and exploring whether other phase transitions in learning exhibit similar robustness to distribution.
+
+
+% ============================================================
+% REFERENCES
+% ============================================================
+\bibliographystyle{plainnat}
+\begin{thebibliography}{20}
+
+\bibitem[Beutel et~al.(2020)]{beutel2020flower}
+D.~J. Beutel, T.~Tober, D.~Stainton, B.~Roesner, T.~Ollivier, et~al.
+\newblock Flower: A friendly federated learning research framework.
+\newblock \emph{arXiv preprint arXiv:2007.14390}, 2020.
+
+\bibitem[Gromov(2023)]{gromov2023grokking}
+A.~Gromov.
+\newblock Grokking modular arithmetic.
+\newblock \emph{arXiv preprint arXiv:2301.02679}, 2023.
+
+\bibitem[Kairouz et~al.(2021)]{kairouz2021advances}
+P.~Kairouz, H.~B. McMahan, B.~Avent, A.~Bellet, M.~Bennis, et~al.
+\newblock Advances and open problems in federated learning.
+\newblock \emph{Foundations and Trends in Machine Learning}, 14(1--2):1--210, 2021.
+
+\bibitem[Karimireddy et~al.(2020)]{karimireddy2020scaffold}
+S.~P. Karimireddy, S.~Kale, M.~Mohri, S.~J. Reddi, S.~Stich, and A.~T. Suresh.
+\newblock {SCAFFOLD}: Stochastic controlled averaging for federated learning.
+\newblock In \emph{ICML}, 2020.
+
+\bibitem[Li et~al.(2020{\natexlab{a}})]{li2020federated}
+T.~Li, A.~K. Sahu, M.~Zaheer, M.~Sanjabi, A.~Talwalkar, and V.~Smith.
+\newblock Federated optimization in heterogeneous networks.
+\newblock In \emph{MLSys}, 2020.
+
+\bibitem[Li et~al.(2020{\natexlab{b}})]{li2020fedprox}
+T.~Li, A.~K. Sahu, M.~Zaheer, M.~Sanjabi, A.~Talwalkar, and V.~Smith.
+\newblock Federated optimization in heterogeneous networks.
+\newblock In \emph{MLSys}, 2020.
+
+\bibitem[Liu et~al.(2022)]{liu2022omnigrok}
+Z.~Liu, O.~Kitouni, N.~Nolte, E.~J. Michaud, M.~Tegmark, and M.~Williams.
+\newblock Omnigrok: Grokking beyond algorithmic data.
+\newblock In \emph{ICLR}, 2022.
+
+\bibitem[McMahan et~al.(2017)]{mcmahan2017communication}
+B.~McMahan, E.~Moore, D.~Ramage, S.~Hampson, and B.~A. y~Arcas.
+\newblock Communication-efficient learning of deep networks from decentralized data.
+\newblock In \emph{AISTATS}, 2017.
+
+\bibitem[Nanda et~al.(2023)]{nanda2023progress}
+N.~Nanda, L.~Chan, T.~Lieberum, J.~Smith, and J.~Steinhardt.
+\newblock Progress measures for grokking via mechanistic interpretability.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem[Power et~al.(2022)]{power2022grokking}
+A.~Power, Y.~Burda, H.~Edwards, I.~Babuschkin, and V.~Misra.
+\newblock Grokking: Generalization beyond overfitting on small algorithmic datasets.
+\newblock In \emph{ICLR (MATH-AI Workshop)}, 2022.
+
+\bibitem[Thilak et~al.(2022)]{thilak2022slingshot}
+V.~Thilak, E.~Littwin, S.~Zhai, O.~Saremi, R.~Paiss, and J.~Susskind.
+\newblock The slingshot mechanism: An empirical study of adaptive optimizers and the grokking phenomenon.
+\newblock \emph{arXiv preprint arXiv:2206.04817}, 2022.
+
+\end{thebibliography}
+
+
+% ============================================================
+% APPENDIX
+% ============================================================
+\appendix
+\section{Full Experiment 2 Results}
+\label{app:exp2}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Complete $(\alpha, K)$ grid for Experiment~2. All values are mean over 3 seeds.}
+\label{tab:exp2_full}
+\begin{tabular}{ccrrrcr}
+\toprule
+$\alpha$ & $K$ & $\alpha_{\mathrm{eff}}$ & $T_{\mathrm{grok}}^{\mathrm{cent}}$ & $T_{\mathrm{grok}}^{\mathrm{FL}}$ & Grokked & Ratio \\
+\midrule
+0.25 &  2 & 0.125 & $25{,}133$ & $25{,}263$ & 3/3 & $1.01\times$ \\
+0.25 &  5 & 0.050 & $25{,}133$ & $25{,}783$ & 3/3 & $1.03\times$ \\
+0.25 & 10 & 0.025 & $25{,}133$ & $26{,}673$ & 3/3 & $1.06\times$ \\
+0.25 & 20 & 0.012 & $25{,}133$ & $29{,}987$ & 3/3 & $1.19\times$ \\
+0.25 & 50 & 0.005 & $25{,}133$ & --- & 2/3 & --- \\
+0.25 & 97 & 0.003 & $25{,}133$ & $\infty$ & 0/3 & --- \\
+\midrule
+0.30 &  2 & 0.150 & $12{,}833$ & $12{,}822$ & 3/3 & $1.00\times$ \\
+0.30 &  5 & 0.060 & $12{,}833$ & $12{,}920$ & 3/3 & $1.01\times$ \\
+0.30 & 10 & 0.030 & $12{,}833$ & $13{,}097$ & 3/3 & $1.02\times$ \\
+0.30 & 20 & 0.015 & $12{,}833$ & $13{,}480$ & 3/3 & $1.05\times$ \\
+0.30 & 50 & 0.006 & $12{,}833$ & $15{,}048$ & 3/3 & $1.17\times$ \\
+0.30 & 97 & 0.003 & $12{,}833$ & $27{,}422$ & 3/3 & $2.14\times$ \\
+\midrule
+0.35 &  2 & 0.175 & $9{,}867$ & $9{,}838$ & 3/3 & $1.00\times$ \\
+0.35 &  5 & 0.070 & $9{,}867$ & $9{,}882$ & 3/3 & $1.00\times$ \\
+0.35 & 10 & 0.035 & $9{,}867$ & $9{,}952$ & 3/3 & $1.01\times$ \\
+0.35 & 20 & 0.017 & $9{,}867$ & $10{,}083$ & 3/3 & $1.02\times$ \\
+0.35 & 50 & 0.007 & $9{,}867$ & $10{,}590$ & 3/3 & $1.07\times$ \\
+0.35 & 97 & 0.004 & $9{,}867$ & $12{,}837$ & 3/3 & $1.30\times$ \\
+\midrule
+0.50 &  2 & 0.250 & $7{,}667$ & $7{,}632$ & 3/3 & $1.00\times$ \\
+0.50 &  5 & 0.100 & $7{,}667$ & $7{,}640$ & 3/3 & $1.00\times$ \\
+0.50 & 10 & 0.050 & $7{,}667$ & $7{,}642$ & 3/3 & $1.00\times$ \\
+0.50 & 20 & 0.025 & $7{,}667$ & $7{,}657$ & 3/3 & $1.00\times$ \\
+0.50 & 50 & 0.010 & $7{,}667$ & $7{,}737$ & 3/3 & $1.01\times$ \\
+0.50 & 97 & 0.005 & $7{,}667$ & $7{,}945$ & 3/3 & $1.04\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\section{Centralised Phase Boundary: Extended Results}
+\label{app:exp1}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_mechanistic.png}
+\caption{Mechanistic investigation of the centralised phase boundary. (1)~Fourier structure formation rate. (2)~Weight growth drives grokking. (3)~Test loss inflection = grokking onset. (4)~Phase portrait: universal attractor. (5)~Memorise first, then organise. (6)~Power-law fit: $T_{\mathrm{grok}} \propto (\alpha - 0.198)^{-0.99}$.}
+\label{fig:exp1_mech}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_refined_boundary.png}
+\caption{Refined phase boundary with dataset sizes (left), $T_{\mathrm{grok}}$ vs.\ training set size on log-log axes showing power-law scaling (centre), and test accuracy curves for all $\alpha$ values (right).}
+\label{fig:exp1_boundary}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp1_ipr_evolution.png}
+\caption{IPR evolution across $\alpha$ values (left) and phase portrait showing IPR vs.\ test accuracy (right). All $\alpha$ values that grok converge to the same attractor ($\mathrm{IPR} \approx 0.35$--$0.48$).}
+\label{fig:exp1_ipr}
+\end{figure}
+
+
+\section{Aggregation Effect: Additional Figures}
+\label{app:exp2_extra}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_training_curves.png}
+\caption{Test accuracy for three representative cells. Blue: centralised-full; red dashed: centralised-reduced; green: FL IID. In panel (b), 10 clients with individually hopeless data shards collectively recover grokking through aggregation alone.}
+\label{fig:exp2_curves}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_slowdown_ratio.png}
+\caption{FL slowdown relative to centralised. Overhead is $<1.2\times$ for $K \leq 20$ and only significant at $K = 97$ near the phase boundary ($\alpha = 0.25$--$0.30$).}
+\label{fig:exp2_slowdown}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_drift_over_time.png}
+\caption{Client drift and test accuracy over time. Drift peaks at the grokking transition and drops once the Fourier solution locks in. At $(\alpha{=}0.25, K{=}97)$, drift grows monotonically.}
+\label{fig:exp2_drift}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_weight_norms.png}
+\caption{Weight norm evolution for layers 1 and 2 across conditions. Centralised-reduced (red dashed) plateaus at low norms---insufficient for grokking. FL IID (green) tracks centralised-full (blue), reaching the same magnitude.}
+\label{fig:exp2_wnorms}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_fl_vs_centralized.png}
+\caption{FL vs.\ centralised $T_{\mathrm{grok}}$ scatter. Points near the diagonal indicate minimal FL overhead; deviation grows with $K$ and lower $\alpha$.}
+\label{fig:exp2_scatter}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_ipr_evolution.png}
+\caption{Fourier structure emergence (IPR) across conditions. FL IID tracks centralised-full; centralised-reduced fails to develop Fourier structure.}
+\label{fig:exp2_ipr}
+\end{figure}
+
+
+\section{Grokking Anatomy Across Conditions}
+\label{app:anatomy}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp3_grokking_anatomy.png}
+\caption{Grokking anatomy: four conditions from comfortable ($\alpha{=}0.3$, IID) to near-boundary ($\alpha{=}0.25$, $\alpha_{\mathrm{dir}}{=}0.01$). Rows: test accuracy, generalisation gap, client drift, IPR, weight norms. Heterogeneity stretches the transition by up to 71\% but the final outcome is identical.}
+\label{fig:exp3_anatomy}
+\end{figure}
+
+
+\section{Phase-Aligned Universal Fingerprint}
+\label{app:fingerprint}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.65\textwidth]{figures/exp3_phase_aligned_fingerprint.png}
+\caption{72 grokking runs aligned to $T_{\mathrm{grok}} = 0$. (a)~Test accuracy, (b)~generalisation gap, (c)~client drift, (d)~IPR. Black: median; shading: IQR. All runs follow a tight common trajectory despite spanning $K \in \{10, 20\}$, $\alpha_{\mathrm{dir}} \in \{0.01\text{--}1000\}$, and $\alpha \in \{0.25\text{--}0.5\}$.}
+\label{fig:fingerprint}
+\end{figure}
+
+
+\section{Drift as a Mechanistic Predictor}
+\label{app:drift}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/fig7_drift_alpha_controlled.png}
+\caption{Drift predicts grokking delay, controlling for $\alpha$. (a)~$T_{\mathrm{grok}}$ vs.\ drift across all 237 runs (red box: 42/46 failures at $\alpha{=}0.2$). (b)~Within-$\alpha$ Spearman $\rho$: significant at every $\alpha$, strongest near the boundary. (c)~Causal chain at $\alpha{=}0.3$: $K \to$ drift $\to T_{\mathrm{grok}}$.}
+\label{fig:drift_controlled}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/fig6_representative_comparison.png}
+\caption{Representative run comparison. (a)~Test accuracy, (b)~train loss, (c)~IPR, (d)~mean client drift, (e)~client weight divergence, (f)~layer-1 weight norm. Healthy grok ($\alpha{=}0.5, K{=}10$), delayed grok ($\alpha{=}0.25$, non-IID), and two failure modes (data-limited and fragmented).}
+\label{fig:representative}
+\end{figure}
+
+
+\section{Heterogeneity: Additional Results}
+\label{app:het}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp3a_phase_diagram.png}
+\caption{Exp 3a: Dirichlet heterogeneity phase diagram ($K{=}10$). Left: $T_{\mathrm{grok}}$ heatmap. Right: grokking success rate. The phase boundary is unchanged across all heterogeneity levels.}
+\label{fig:exp3a_phase}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp3b_structured_partitions.png}
+\caption{Exp 3b: Structured partition comparison ($K{=}10$). IID, operand-based, and target-based partitions yield statistically indistinguishable $T_{\mathrm{grok}}$ at all $\alpha$ values.}
+\label{fig:exp3b_partitions}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp3_weight_norm_evolution.png}
+\caption{Weight norm evolution across heterogeneity levels. Non-IID slows growth by ${\sim}20$--$30\%$ but final values converge.}
+\label{fig:exp3_wnorms}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp3_ipr_trajectories.png}
+\caption{IPR trajectories by heterogeneity level. More heterogeneous data slows IPR growth but the final plateau is identical.}
+\label{fig:exp3_ipr}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp3_grokking_sharpness.png}
+\caption{Transition sharpness vs.\ heterogeneity. Left: absolute width ($T_{\mathrm{grok}} - T_{50}$). Right: normalised sharpness. Heterogeneity broadens the transition near the boundary but has minimal effect in the interior.}
+\label{fig:exp3_sharpness}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp3_drift_ipr_correlation.png}
+\caption{Drift--IPR correlation at the grokking transition. Left: client drift vs.\ IPR at $T_{\mathrm{grok}}$. Right: weight divergence vs.\ IPR. IPR at grokking is invariant to drift level---the same Fourier solution is reached regardless of optimisation noise.}
+\label{fig:exp3_drift_ipr}
+\end{figure}
+
+
+\section{Optimisation Fragmentation (Experiment 4)}
+\label{app:exp4}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp4a_drift.png}
+\caption{Exp 4a: Drift accumulation $\times$ heterogeneity ($K{=}10$, $S{=}50$k). At $\alpha{=}0.25$ with non-IID data, $E \geq 25$ prevents grokking (red~$\times$). At $\alpha{=}0.5$, grokking is immune to local epochs.}
+\label{fig:exp4a}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp4b_participation.png}
+\caption{Exp 4b: Partial participation $\times$ heterogeneity ($K{=}10$, $E{=}5$). Participation fraction has minimal effect on $T_{\mathrm{grok}}$ at all $\alpha$ values, with slight delay under non-IID at $\alpha{=}0.25$.}
+\label{fig:exp4b}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp4c_compute_comm.png}
+\caption{Exp 4c: Compute vs.\ communication tradeoff ($K{=}10$, $R{=}2000$, IID). At low $\alpha$, insufficient local computation ($E{=}1$) prevents grokking (red~$\times$). At $\alpha{=}0.5$, even $E{=}1$ suffices.}
+\label{fig:exp4c}
+\end{figure}
+
+
+\section{FedProx Sweep}
+\label{app:fedprox}
+
+\begin{table}[h]
+\centering
+\small
+\caption{FedProx sweep ($K{=}5$, IID, $\alpha{=}0.5$). Sharp transition between $\mu{=}0.001$ (groks) and $\mu{=}0.01$ (fails).}
+\label{tab:fedprox}
+\begin{tabular}{rlrrrl}
+\toprule
+$\mu$ & Label & Final test acc & $T_{\mathrm{grok}}$ & $\|W_1\|_F$ & Status \\
+\midrule
+0     & FedAvg    & 100.0\% & 8{,}215  & 23.80 & Groks \\
+0.001 & FedProx   &  99.7\% & 9{,}075  & 22.39 & Groks (10\% delayed) \\
+0.01  & FedProx   &   0.1\% & ---   & 15.14 & Weight growth suppressed \\
+0.1   & FedProx   &   1.0\% & ---   & NaN   & Diverges \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\section{Stress Tests: Client Scaling and Extreme Local Epochs}
+\label{app:stress}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Client scaling ($\alpha{=}0.5$, IID, full participation). Grokking is immune to client count.}
+\begin{tabular}{rrrrr}
+\toprule
+$K$ & Samples/client & $T_{\mathrm{grok}}$ & Final acc & Final IPR \\
+\midrule
+5   & 940 & 8{,}215 & 100.0\% & 0.342 \\
+10  & 470 & 8{,}220 & 100.0\% & 0.342 \\
+20  & 235 & 8{,}240 & 100.0\% & 0.340 \\
+50  & 94  & 8{,}280 & 100.0\% & 0.332 \\
+97  & 48  & 8{,}430 & 100.0\% & 0.311 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Extreme local epochs ($K{=}5$, IID). Even $E{=}200$ (100 rounds) groks. Higher $E$ gives higher IPR.}
+\begin{tabular}{rrrrr}
+\toprule
+Local epochs ($E$) & Rounds & $T_{\mathrm{grok}}$ & Final acc & Final IPR \\
+\midrule
+50  & 400 & 8{,}300  & 100.0\% & 0.457 \\
+100 & 200 & 8{,}400  & 100.0\% & 0.446 \\
+200 & 100 & 9{,}000  & 100.0\% & 0.426 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Partial participation ($K{=}20$, target partition, $E{=}5$). The only axis that degrades accuracy.}
+\begin{tabular}{rrrrrr}
+\toprule
+Fraction ($f$) & Clients/round & $T_{\mathrm{grok}}$ & Final acc & Final IPR \\
+\midrule
+1.0 & 20 & 9{,}585 & 98.5\% & 0.214 \\
+0.8 & 16 & 9{,}600 & 97.5\% & 0.218 \\
+0.6 & 12 & 9{,}725 & 96.2\% & 0.220 \\
+0.4 &  8 & 9{,}900 & 93.9\% & 0.222 \\
+0.2 &  4 & 9{,}720 & 94.5\% & 0.242 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\section{Width Validation (Experiment 0)}
+\label{app:exp0}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp0_width_validation.png}
+\caption{Width validation: $N \in \{100, 128, 200, 256\}$ across $\alpha$ values. All widths produce nearly identical $T_{\mathrm{grok}}$; width is not a confound.}
+\label{fig:exp0}
+\end{figure}
+
+
+\section{Seed Consistency}
+\label{app:seeds}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{figures/exp2_seed_consistency.png}
+\caption{Exp 2: Seed consistency across the $(\alpha, K)$ grid. Low variance at high $\alpha$; increasing variability near the phase boundary.}
+\label{fig:exp2_seeds}
+\end{figure}
+
+
+\end{document}
