@@ -501,6 +501,27 @@ config+seed at 200k had reached only 67% train at the step where the 1M run
 reports `t_memo`. Trajectories are not reproducible on C — RESULTS §23 — so
 "under-budgeted" and "unstable" cannot be separated with n=3. Not to be quoted.
 
+### 9. Full client state on one D coset cell — do the clients' lookup tables sum or cancel?
+
+RESULTS §24 explains D's failure under coset and operand sharding as clients
+each building a second-operand lookup B[c,b] that averaging keeps. The
+inference rests on the A/B asymmetry tracking the sharded operand; it is not
+measured on the clients, because `client_signature` ships only the
+first-operand block U and B needs V and W₂.
+
+**Not written.** Needs a config flag (or a widened `client_signature`) that
+ships each client's full state dict at checkpoint rounds, then the banked
+coset K=5 cell re-run under it: 3 runs, ~2 h each on the L4 box (median
+`wall_s` of the banked cell). A new field changes the run id, so this is a new
+cell, not a resume.
+
+> **Decision rule.** Reconstruct each client's B table from its own W₂ and V.
+> If the five tables are pairwise near-orthogonal and their sum is the global
+> B → summation, and a server-side removal of the additive logit part should
+> unmask T on the banked checkpoints without training. If the tables are
+> aligned → the average would decay on its own and the stall needs another
+> account.
+
 ## Reproducibility — the harness is not run-to-run deterministic
 
 Found by the six duplicate cells above. Same config and seed, two runs: D differs by

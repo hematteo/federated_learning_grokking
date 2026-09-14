@@ -99,14 +99,17 @@ src/fedgrok/
   data/        modular arithmetic, S_n composition, MNIST-1k; partitioners
   models/      GrokNet (quadratic MLP), Nanda transformer, ReLU MLP
   training/    centralised loop, Flower/Ray federated loop, SCAFFOLD, runner
-  metrics/     Fourier/IPR, S_n isotypic decomposition, quadratic-circuit split
+  metrics/     Fourier/IPR, S_n isotypic decomposition, quadratic-circuit split,
+               additive (single-operand) split for any architecture
   analysis/    t_grok / t_memo detection, censored-survival statistics
   manifest.py  spec -> config, content-hash run ids, grid expansion
   run.py       single-run entry point, atomic result JSON
 
 manifests/           every experiment, declared as JSONL run specs
 scripts/             build_manifests, validate_manifest, launch_sweep, collect_runs,
-                     summarize_runs, backfill_runs, package_checkpoints, ...
+                     summarize_runs, backfill_runs, package_checkpoints,
+                     analyze_mechanism, analyze_federated_circuits,
+                     analyze_order_parameters, ...
 scripts/plotting/    paper_figures (the figure set), run_atlas, grok_curves, ...
 paper/               figures.tex and paper/figures/ (fig1-7, A1-A2, PNG + PDF)
 results/data/        runs_v2.csv (1,685 runs) and the per-run result rows

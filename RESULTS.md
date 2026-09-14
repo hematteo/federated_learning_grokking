@@ -1,6 +1,6 @@
 # Results — federated grokking
 
-Everything measured, as of 2026-09-07. Branch `v2-multisetup`.
+Everything measured, as of 2026-09-09. Branch `v2-multisetup`.
 
 Companion documents: `PROGRESS.md` (what is built and what remains) and `plans/`
 (index in `plans/README.md`) — the multi-setup campaign and the boundary campaign
@@ -179,10 +179,353 @@ partially censored.
     threshold. **Every quantitative claim on C is withheld** until aggregation is
     made deterministic or C is run at n≈10. "Seeds" should read "runs".
 
+26. **Setup D's federated stalls are masking, not a missing circuit** (§24). The
+    exact quadratic split scores the compositional term T on its own above the
+    85% bar in every stalled cell — 95.3% at E=50 after two million steps
+    against the model's 82.3%, 94.4% under the coset partition against 70.8%,
+    82.7% under operand against 11.0% — while the single-operand marginals mask
+    it. Which marginal follows the partition: sharding the first operand zeroes
+    A and inflates B to 0.41–0.71 of the logit energy; removing B alone restores
+    the bar. The transformer has no marginal channel at all (single-operand
+    energy 0.00 on every grokked C cell), which is why the same coset split
+    speeds C up and stops D: on C it steers the embedding onto the standard
+    irrep [4,1], 98.6% of its energy.
+
+27. **The order parameters through the federated axes** (§25). On the anchor
+    the Fourier IPR at the moment of crossing is 0.15–0.16 on every cell — K,
+    E, partition, participation, aggregation rule — so federation changes when
+    the circuit is reached and how sharp it later becomes, never the
+    concentration needed to cross. Client drift is spectrally white with
+    respect to that circuit: after grokking each neuron carries 99% of its
+    power at one frequency and the clients' per-round changes put 2% there,
+    the uniform share, with their moves at that frequency cancelling in the
+    average; the target split is the one partition whose client movement
+    carries a systematically larger on-circuit share, and it is the slowest.
+    On the transformer, decoupled decay builds the embedding's Fourier
+    structure whether or not the shards can be fit: at wd 1.0 the K=50,
+    target and Dirichlet ≤0.1 runs that never memorise carry more embedding
+    structure (IPR 0.22–0.28) than any run that groks, and at wd 0.1 the
+    centralised order — memorise first, structure later — returns. On S₅ the
+    quadratic MLP passes through a coset-level stage that federation stretches
+    from ~1,000 steps to 20,000–40,000; the transformer's single-irrep
+    embedding arrives whole, coset and exact accuracy crossing together.
+
 Open: whether K=97 IID *fails* or is merely *slow* — both successes landed within
 5% of the budget ceiling, so that cell is not yet resolved.
 
 ---
+
+## 25. The order parameters through the federated axes
+
+Post-hoc, no new runs, 2026-09-09. Regenerate with
+`venv/bin/python scripts/analyze_order_parameters.py all` (`ipr`, `drift`,
+`embed`, `s5`). The instruments are the ones every eval round already logs —
+`ipr` on A, `embed_ipr` on B, `coset_accuracy` and the irrep profile of U on D,
+`coset_accuracy` on C — plus the per-client first-layer snapshots at checkpoint
+rounds. §24 asked what federation does to the circuit; this asks what it does
+to the order parameters that track the circuit forming.
+
+### 25.1 On the anchor, the circuit at the crossing is the same circuit everywhere
+
+Per-neuron spectral IPR of `W1[:, :97]` (0.020 at init, 1.0 for a pure
+single-frequency neuron), medians over runs:
+
+| cell | @memorisation | @first crossing | end |
+|---|---|---|---|
+| centralised α 0.30 | 0.024 | 0.156 | 0.422 |
+| iid K = 2 / 10 / 50, E = 5 | 0.024 | 0.156 / 0.155 / 0.154 | 0.418 / 0.409 / 0.372 |
+| iid K = 10, E = 1 / 10 / 25 / 50 | 0.024 | 0.156 / 0.155 / 0.156 / 0.152 | 0.422 / 0.405 / 0.384 / 0.303 |
+| operand K = 10 / 50 | 0.024 | 0.157 / 0.157 | 0.439 / **0.493** |
+| target K = 10 / 50 | 0.024 / 0.167 | 0.147 / 0.142 | 0.332 / 0.191 |
+| Dirichlet 0.01 … 1000, K = 10 | 0.024 | 0.153–0.156 | 0.371–0.415 |
+| f = 0.25 / 0.5, K = 20 | 0.024 | 0.161 / 0.157 | 0.468 / 0.459 |
+| K = 97 iid (2/5) · operand (5/5), α 0.25 | 0.022 | 0.156 / 0.164 | 0.128 / 0.244 |
+| FedAvg · FedAdam · FedYogi · SCAFFOLD · FedAvgM, H1 | 0.022 · 0.024 · **0.050** · 0.024 · 0.024 | 0.161 · 0.201 · 0.204 · 0.180 · 0.173 | 0.41 · 0.43 · 0.45 · 0.48 · 0.45 |
+
+**The IPR at the crossing is 0.15–0.16 on every FedAvg cell in the study.**
+Memorisation happens at the random-init value everywhere, so on A the two
+phases are cleanly separated in weight space: memorise with an unstructured
+first layer, then build frequencies, and cross the bar at the same spectral
+concentration whatever K, E, the partition or the participation. Federation
+moves *when* that concentration is reached and how sharp the circuit later
+becomes: coherent shards end sharper than random ones (0.493 against 0.372 at
+K=50), high local work and high K end blunter (0.303 at E=50), and partial
+participation ends sharper than full (0.468 against 0.404). The adaptive
+server optimisers are the one departure — FedYogi already carries Fourier
+structure at memorisation (0.05, and 0.17 on H3) and every adaptive rule
+crosses at 0.20 rather than 0.16 — so they do not just cross sooner, they
+build the circuit *during* memorisation rather than after it.
+
+### 25.2 Client drift is spectrally white with respect to the circuit
+
+From the per-client `W1[:, :97]` snapshots on A (FedAvg, every campaign that
+saved them). For each neuron, the share of its spectral power at its own
+dominant frequency in the global model (`conc_g`; a uniform spectrum gives
+1/48 = 0.021) and the same share in the clients' per-round deviations from
+that model (`conc_d`); `agree` is the energy of the mean deviation over the
+mean energy of the deviations at that frequency — 1 if the clients move it
+identically, 1/K if independently, 0 if their moves cancel. Medians over
+runs and checkpoint rounds:
+
+| cell | post-crossing `conc_g` | `conc_d` | `agree` | 1/K |
+|---|---|---|---|---|
+| iid K = 2 / 10 / 50, α 0.30 | 0.992 / 0.991 / 0.988 | 0.014 / 0.018 / 0.018 | 0.000 | 0.50 / 0.10 / 0.02 |
+| iid K = 20 / 50, α 0.25 | 0.993 / 0.905 | 0.018 / 0.019 | 0.000 | 0.05 / 0.02 |
+| Dirichlet 0.1 … 1000, K = 10 | 0.99 | 0.018–0.019 | 0.001–0.006 | 0.10 |
+| Dirichlet 0.01, K = 10 / 20 | 0.989 / 0.412 | 0.022 / 0.026 | 0.008 / 0.006 | 0.10 / 0.05 |
+| operand K = 10 / 50 | 0.991 / 0.994 | 0.013 / 0.018 | 0.000 / 0.001 | 0.10 / 0.02 |
+| **target K = 10 / 50** | 0.971 / 0.283 | **0.033 / 0.031** | 0.000 / 0.001 | 0.10 / 0.02 |
+| f = 0.25 / 0.5, K = 20 | 1.000 / 0.999 | 0.017 | 0.000 | 0.05 |
+| K = 97 iid (2/5) | 0.187 | 0.020 | 0.000 | 0.01 |
+
+Before the crossing `conc_g` is ~0.15 and `conc_d` is 0.02 on every cell.
+
+After grokking each neuron of the global model is a single frequency (99% of
+its power), and what the clients do to that neuron in a round puts the
+*uniform* share at that frequency — no more of the circuit than white noise
+would. At the circuit frequency the clients' moves cancel in the average
+(`agree` ≈ 0, below the 1/K an independent draw would give). The per-round
+deviations are ~10⁻⁵ of the weight energy. So the circuit is built by the
+small coherent residual that survives averaging, round after round, while the
+bulk of client movement is off-circuit and is removed by the average: that is
+§18.4's "sampling noise averages out" measured at the weights. The one
+partition whose client movement carries a systematically larger on-circuit
+share is **target**, the label-conflicting split (0.033, 1.5× uniform, at both
+K), and it is the slowest partition in the study; Dirichlet 0.01 sits between
+(0.022–0.026, and the only cells with `agree` clearly above zero). Under
+coherent (`operand`) sharding the on-circuit share is *lowest* (0.013 at
+K=10). Cells that did not finish grokking are the ones whose neurons never
+became single-frequency (K=97 iid 0.19, target K=50 0.28).
+
+### 25.3 On the transformer, decay builds the embedding's Fourier structure whether or not the shards can be fit
+
+Setup B, IPR of the DFT of `W_E` over the token index (0.017 at init). Train
+accuracy / embedding IPR at fixed steps, medians over runs:
+
+| cell | 1,000 | 4,000 | 8,000 | 16,000 | 32,000 | 100,000 |
+|---|---|---|---|---|---|---|
+| centralised, wd 1.0 | 100 / 0.019 | 100 / 0.046 | 100 / 0.123 | 100 / 0.160 | | |
+| iid K = 10, wd 1.0 | 18 / 0.018 | 79 / 0.029 | 100 / 0.178 | 100 / 0.187 | 100 / 0.175 | 100 / 0.174 |
+| iid K = 20, wd 1.0 | 8 / 0.018 | 48 / 0.051 | 83 / 0.131 | 100 / 0.170 | 100 / 0.181 | 100 / 0.169 |
+| **iid K = 50, wd 1.0** (never memorises) | 4 / 0.018 | 5 / 0.026 | 4 / 0.032 | 5 / 0.056 | 28 / 0.232 | 33 / **0.254** |
+| **target K = 10, wd 1.0** (never memorises) | 4 / 0.021 | 4 / 0.066 | 6 / 0.149 | 10 / 0.255 | 9 / 0.273 | 8 / **0.284** |
+| **Dirichlet 0.1 K = 10, wd 1.0** (never memorises) | 5 / 0.019 | 17 / 0.109 | 23 / 0.225 | 24 / 0.226 | 24 / 0.215 | 24 / 0.223 |
+| iid K = 20, wd 0.1 | 33 / 0.018 | 100 / 0.018 | 100 / 0.019 | 100 / 0.024 | 100 / 0.028 | 100 / 0.141 |
+| iid K = 50, wd 0.1 (memorises at 53k) | 9 / 0.018 | 54 / 0.018 | 75 / 0.018 | 62 / 0.020 | 78 / 0.031 | 99 / 0.054 |
+
+Centrally the order is the anchor's: memorise at step 200 on a random
+embedding, then structure it. Under federation at wd 1.0 the order inverts
+with K: at K=10 structure and memorisation arrive together, at K=20 the
+embedding is half-structured at 83% train, and at K=50 the embedding reaches
+IPR 0.25 while the training set is never fit. The **runs that fail to
+memorise are the most Fourier-structured transformers in the study** — K=50,
+target and Dirichlet 0.1 at wd 1.0 end at 0.22–0.28 against 0.16–0.19 for
+every run that groks. At wd 0.1 the centralised order returns: K=20 memorises
+by 4,000 steps at IPR 0.018 and structures the embedding only from 64,000.
+
+This is §14.3's decay clock seen in the weights. Decoupled decay drives `W_E`
+toward a sparse Fourier structure on its own timescale, and the fitting signal
+from a shard competes with it; when the shard is too small (K=50) or too
+skewed (Dirichlet ≤ 0.1, target) the structure wins and memorisation never
+happens. Ten times less decay and the race is won by fitting, as centrally.
+The per-client embedding channel is inert on B as on C (client deviation
+< 0.4% of energy), so this is a global-model reading.
+
+### 25.4 On S₅ the coset level leads exact accuracy on the quadratic MLP, not on the transformer
+
+Stander et al.'s coset attribution (`coset_accuracy`: the prediction lands in
+the right coset of S₄). `t_c` is the first step it reaches 85%; lead =
+`t_first_cross` − `t_c`:
+
+| cell | D: t_c → t_cross (lead) | C: t_c → t_cross (lead) |
+|---|---|---|
+| centralised α 0.30 | 20,500 → 21,500 (**1,000**) | — |
+| iid K = 2 / 5 | 2,300 / 3,600 | 0 / 0 |
+| iid K = 10 / 20 | 52,100 → 78,900 (**26,800**) / 26,400 | 0 / 100 |
+| iid K = 10, E = 10 / 25 | 31,300 / 40,600 | 100 / 0 |
+| f = 0.5 / 0.25, K = 20 | 18,900 / 7,400 | 0 / 0 |
+| Dirichlet 1000 / 10, K = 10 | 7,500 / 21,200 | 100 / 0 |
+| coset K = 5 · operand K = 10 | stalled: coset 77.0 vs test 70.8 · 31.5 vs 11.0 | 400 / 100 |
+| stalled E = 50 · 2M · Dirichlet 1.0 | coset@end 85.5 / 86.7 / 81.7 vs test 80.8 / 82.3 / 75.9 | — |
+
+On D the coset level always comes first — 1,000 steps ahead centrally, and
+20,000–40,000 steps ahead under federation at K ≥ 10 or E ≥ 10 — and in the
+stalled cells the model sits five points *above* its exact accuracy at the
+coset level, with purity 0.92–0.95 against 0.99 when grokked: the masked
+models of §24 mostly err within the right coset. On C the lead is 0–100 steps
+on every grokked cell; the transformer's single-irrep solution arrives whole.
+
+D's operand blocks never concentrate on an irrep the way C's embedding does
+(`irrep_structure_u` 0.07–0.19 at the end against 0.78–0.86 on C), and the
+share that grows under federation is the **sign representation** — parity, the
+coarsest compositional invariant of S₅: 1.9× its random share centrally, 2.6×
+at K=10, 4.9× at K=20, 10.2× at K=50, 7.2× and 26.6× on the Dirichlet 0.1 and
+0.01 cells that never train. Whether the parity channel is what a starved
+shard can still learn or a symptom of the stall is open. On C, where
+checkpoints exist before the crossing (K=50, E=50, Dirichlet 0.1), the
+embedding is already half-structured (0.44–0.55) before the model crosses and
+0.78–0.86 after; the failing target runs are structured (0.64–0.66) in the
+wrong way, the failing operand K=50 runs not at all (0.17).
+
+> **Consequences.** (1) On the anchor the federated circuit is the centralised
+> circuit reached later, not a different one; comparisons of "what federation
+> learns" should be made on the end-state sharpness, which does move.
+> (2) §17.4's drift result now has a spectral form: what is averaged away is
+> off-circuit, what conflicts on labels is on-circuit, and the two can be
+> told apart on the per-client snapshots without any outcome data.
+> (3) The transformer's memorisation collapse under federation is a
+> structured-but-unfit state, not an untrained one — the opposite of D's
+> masked state, which is fit-and-structured-but-overridden. (4) The coset
+> lead is a cheap, architecture-specific early signal of grokking on D that
+> federation lengthens by an order of magnitude.
+
+## 24. Why federation stalls setup D: the compositional circuit is built, then masked
+
+Post-hoc, no new runs, 2026-09-09. Regenerate with
+`venv/bin/python scripts/analyze_federated_circuits.py all` (or `masking`,
+`decompose`, `additive`, `embedding`). Setup D's quadratic activation makes
+`logit = A[c,a] + 2T[c,a,b] + B[c,b]` exact (§16.3), so every banked checkpoint
+can be scored with each term removed; T is the only term that can compose.
+
+### 24.1 T alone crosses the bar in every stalled cell; the full model never does
+
+From the per-round histories (`circ_acc_interaction` is T scored alone on the
+held-out pairs). Medians over 3 runs; `t_T` is the first step T alone reaches
+85%, `t_full` the model's own first crossing:
+
+| cell | held | T ≥ 85 | t_T | t_full | final test | final T alone |
+|---|---|---|---|---|---|---|
+| centralised α 0.30 | 3/3 | 3/3 | 17,500 | 21,500 | 96.9 | 99.4 |
+| iid K=2, E=5 | 3/3 | 3/3 | 14,600 | 21,800 | 96.4 | 99.4 |
+| iid K=10, E=5 | 3/3 | 3/3 | 27,500 | 78,900 | 90.2 | 97.7 |
+| iid K=20, E=5 | 3/3 | 3/3 | 38,700 | 94,300 | 88.8 | 97.0 |
+| iid K=50, E=5 | 0/3 | 1/3 | 236,600 | — | 32.5 | 82.9 |
+| iid K=10, E=10 | 3/3 | 3/3 | 27,600 | 85,400 | 88.5 | 97.2 |
+| iid K=10, E=25 | 3/3 | 3/3 | 30,600 | 100,100 | 86.9 | 96.5 |
+| **iid K=10, E=50** | **0/3** | **3/3** | **37,900** | **—** | **80.8** | **95.0** |
+| iid K=10, E=50, 2M steps | 0/3 | 3/3 | 37,000 | — | 82.3 | 95.3 |
+| Dirichlet 1.0, K=10 | 0/3 | 3/3 | 58,600 | — | 75.9 | 90.1 |
+| Dirichlet 1000, K=10 | 3/3 | 3/3 | 23,100 | 44,000 | 90.5 | 98.5 |
+| **coset K=5** | **0/3** | **3/3** | **62,500** | **—** | **70.8** | **94.4** |
+| operand K=10 | 0/3 | 1/3 | 219,600 | — | 11.0 | 82.7 |
+| target K=10 | 0/3 | 0/3 | — | — | 0.8 | 0.8 |
+
+On D, grokking always has this shape: T reaches the bar first and the model
+follows once the marginals have shrunk enough to stop overriding it — centrally
+4,000 steps later, at K=10 51,000 steps later. Federation lengthens that second
+phase without bound. §22's fixed point is a model whose compositional circuit
+generalises at 95% and whose output is decided by something else.
+
+### 24.2 Which marginal masks follows the partition
+
+Final checkpoint of each cell, medians over 3 runs. Accuracy with a term
+removed, and each term's class-centred logit energy over the full logit's:
+
+| cell | model | T alone | without A | without B | e_A | e_B | e_T |
+|---|---|---|---|---|---|---|---|
+| iid K=2, E=5 | 96.4 | 99.4 | 98.5 | 98.4 | 0.09 | 0.09 | 0.84 |
+| iid K=10, E=5 | 90.2 | 97.7 | 95.0 | 94.8 | 0.11 | 0.11 | 0.79 |
+| iid K=50, E=5 | 32.5 | 82.9 | 53.5 | 53.1 | 0.08 | 0.08 | 0.73 |
+| iid K=10, E=50 | 80.8 | 95.0 | 88.9 | 89.3 | 0.13 | 0.13 | 0.76 |
+| Dirichlet 1.0 | 75.9 | 90.1 | 84.6 | 85.0 | 0.11 | 0.11 | 0.76 |
+| **coset K=5** | 70.8 | 94.4 | 70.9 | **94.8** | **0.00** | **0.41** | 0.60 |
+| **operand K=10** | 11.0 | 82.7 | 11.1 | **82.0** | **0.00** | **0.71** | 0.31 |
+| target K=10 | 0.8 | 0.8 | 0.7 | 0.7 | 0.24 | 0.24 | **0.00** |
+
+Three regimes. Under **iid, Dirichlet and high K** both marginals inflate
+symmetrically and masking grows with local work and client count: T-alone minus
+model is 7.5 / 8.7 / 9.6 / 14.2 points at E = 5 / 10 / 25 / 50, and 3.0 / 4.0 /
+7.5 / 8.2 / 50.4 at K = 2 / 5 / 10 / 20 / 50. Under **coset and operand** — both
+shard the *first* operand — A's energy is exactly zero and B's is four to seven
+times the iid value; removing B alone puts the model at or near the bar, removing
+A does nothing. Under **target** T never forms: the two marginals carry equal
+energy and the model is a class prior.
+
+The reading: within a client whose first operands are confined to a coset, the
+answer given `b` concentrates on the classes reachable from that coset, so a
+second-operand lookup B[c,b] is locally useful — and a first-operand lookup is
+not, because every `b` is present. Each client builds its own B; the average of
+five shard-specific tables is not zero, and each round rebuilds them.
+
+### 24.3 The fixed point is stationary in every term
+
+`x_e50_long`, medians over 3 runs at 200k → 2M steps: model 81.0 → 82.3, T alone
+95.3 → 95.3, e_A = e_B = 0.13 throughout, irrep structure of U and V 0.07
+throughout (against 0.11 for the grokked K=10 cell — the E=50 model's operand
+blocks are *closer* to random than the grokked model's, not further). Nothing in
+the decomposition moves over 1.8 million steps; the state §22 measured on norms
+and drift is the same state seen from inside the circuit.
+
+### 24.4 The transformer has no marginal channel — why coset helps C and stops D
+
+`metrics/additive.py` fits `L = μ + f[a] + g[b] + R[a,b]` by least squares on the
+full grid, which is defined for any architecture. Checked against the exact
+split on D: interaction-only 97.8 against T-only 97.7 (iid K=10), 94.6 against
+94.4 (coset). Held-out accuracy, final checkpoint, medians over 3 runs:
+
+| C cell | model | R alone | e_f | e_g | e_R |
+|---|---|---|---|---|---|
+| iid K=5 / 10 / 50 (K ladder, α 0.5) | 100 | 100 | 0.00 | 0.00 | 0.91–0.98 |
+| coset K=5 | 100 | 100 | 0.00 | 0.00 | 0.95 |
+| Dirichlet K=10 · operand K=10 | 100 | 100 | 0.00 | 0.00 | 0.97 · 0.98 |
+| target K=10 (0/3) | 12.1 | 19.7 | 0.00 | 0.00 | 0.50 |
+| Dirichlet K=50 (0/3) | 23.7 | 28.6 | 0.04 | 0.04 | 0.85 |
+| operand K=50 (0/3) | 0.1 | 0.6 | 0.04 | **0.42** | 0.34 |
+
+Every grokked transformer is pure interaction: single-operand energy 0.00. Its
+failures are missing circuits, not masked ones — the operand K=50 cell grows
+the same inflated second-operand marginal D does, with nothing under it. So the
+partition result of §17.2 has a mechanism: coherent sharding inflates a
+single-operand lookup wherever the architecture has one to inflate. The
+quadratic MLP does, by its algebra; the transformer does not.
+
+What coset sharding does on C is visible in the embedding. Every grokked C
+model composes in a **single irrep**: at the final checkpoint one isotypic
+component holds 70–99% of W_E's energy on all 21 grokked runs across the
+partition and K-ladder cells. Which irrep is the seed's choice under iid —
+[2,2,1], [4,1], [2,1,1,1] and [3,2] all appear across the twelve iid runs —
+and the partition's choice under structured sharding:
+
+| C cell | dominant irrep of W_E per run (share) | held |
+|---|---|---|
+| iid K=5 (α 0.5) | [2,2,1] 0.98 · [4,1] 0.88 · [2,1,1,1] 0.91 | 3/3 |
+| iid K=10 (α 0.5) | [2,2,1] 0.96 · [2,2,1] 0.99 · [2,1,1,1] 0.91 | 3/3 |
+| **coset K=5** | **[4,1] 0.99 · [4,1] 0.99 · [4,1] 0.98** | 3/3 |
+| operand K=10 | [2,2,1] 0.97 · [2,2,1] 0.94 · [4,1] 0.99 | 3/3 |
+| Dirichlet K=10 | [2,2,1] 0.98 · [4,1] 0.71 · [4,1] 0.90 | 3/3 |
+| operand K=50 | none — top share 0.39 / 0.28 / 0.26, structure 0.07–0.29 | 0/3 |
+| target K=50 | trivial [5] 0.67 / 0.61 / 0.38 — a class prior | 0/3 |
+
+The coset partition uses the S₄ subgroup, whose left cosets are labelled by the
+image of point 5 — a function on S₅ that lives in the standard representation
+[4,1] — and every coset run puts 98–99% of its embedding there, the highest
+concentration and the fastest crossings (4,100–4,500 steps) in the study. So
+on the transformer the coherent split does not inflate anything; it fixes
+which faithful irrep the model composes in, and fixes it to the one the shards
+are organised by. The failing K=50 operand runs never choose an irrep at all
+(structure 0.07–0.29 against 0.75–0.86 for every grokked run), which is the
+embedding-side view of the missing circuit above. The per-client channel says
+nothing here: client embeddings deviate from their mean by under 1% of energy
+on every C cell.
+
+### 24.5 What this does not show
+
+Per-client snapshots carry only the first-operand block (`client_signature`),
+so "clients' B tables sum rather than cancel" is inferred from the A/B asymmetry
+tracking the sharded operand, not measured on the clients. The client-side
+probes in the histories are evaluated on each client's own training pairs and
+cannot be compared with the global test-side values. One coset cell with full
+client state dicts would settle it (RUNS_TODO entry 9).
+
+> **Consequences.** (1) §22's equilibrium is not generalisation prevented; it is
+> generalisation reached inside T and overridden by single-operand terms that
+> federation keeps alive — so a server-side step that removes the additive part
+> of the logit (or a decay that acts on the marginals faster than on T) is
+> predicted to unmask it without new training. (2) §17.2's "whether coherence
+> helps is a property of the setup" is now "a property of whether the
+> architecture has a single-operand channel". (3) On D, `t_T` is a cleaner
+> clock than `t_first_cross` for the circuit-building phase, and it is finite
+> on cells the ledger records as censored.
 
 ## 23. Reproducibility — the harness is not run-to-run deterministic
 
