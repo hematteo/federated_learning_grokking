@@ -1,0 +1,18 @@
+{
+  "alpha": 0.3,
+  "checkpoint_every": 1000,
+  "hidden_width": 256,
+  "loss": "mse",
+  "lr": 50.0,
+  "model": "groknet",
+  "optimizer": "gd",
+  "p": 97,
+  "seed": 42,
+  "task": "addition",
+  "mode": "centralized",
+  "epochs": 50000,
+  "log_every": 100,
+  "setup": "A",
+  "id": "cent_addition_df5bf7892708",
+  "output_dir": "/home/james/Documents/modules/ToDL/federated_learning_grokking/results/mechinterp/twins/runs/cent_addition_df5bf7892708"
+}

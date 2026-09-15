@@ -1,0 +1,22 @@
+{
+  "batch_size": 100,
+  "checkpoint_every": 1000,
+  "dataset": "mnist",
+  "hidden_width": 200,
+  "init_scale": 9.0,
+  "loss": "mse",
+  "lr": 0.001,
+  "model": "mlp",
+  "n_layers": 3,
+  "n_test": 5000,
+  "n_train": 2000,
+  "optimizer": "adamw",
+  "seed": 123,
+  "weight_decay": 0.1,
+  "mode": "centralized",
+  "epochs": 40000,
+  "log_every": 100,
+  "setup": "E",
+  "id": "cent_2e647ff611ae",
+  "output_dir": "/home/james/Documents/modules/ToDL/federated_learning_grokking/results/mechinterp/twins/runs/cent_2e647ff611ae"
+}

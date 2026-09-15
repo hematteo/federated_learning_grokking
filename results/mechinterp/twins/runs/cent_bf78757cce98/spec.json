@@ -1,0 +1,19 @@
+{
+  "alpha": 0.3,
+  "checkpoint_every": 5000,
+  "dataset": "s5",
+  "group_n": 5,
+  "hidden_width": 256,
+  "loss": "ce",
+  "lr": 0.001,
+  "model": "groknet",
+  "optimizer": "adamw",
+  "seed": 123,
+  "weight_decay": 1.0,
+  "mode": "centralized",
+  "epochs": 250000,
+  "log_every": 500,
+  "setup": "D",
+  "id": "cent_bf78757cce98",
+  "output_dir": "/home/james/Documents/modules/ToDL/federated_learning_grokking/results/mechinterp/twins/runs/cent_bf78757cce98"
+}

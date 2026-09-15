@@ -1,0 +1,22 @@
+{
+  "alpha": 0.3,
+  "checkpoint_every": 2000,
+  "d_mlp": 512,
+  "dataset": "modular",
+  "hidden_width": 128,
+  "loss": "ce",
+  "lr": 0.001,
+  "model": "transformer",
+  "n_heads": 4,
+  "optimizer": "adamw",
+  "p": 113,
+  "seed": 123,
+  "task": "addition",
+  "weight_decay": 1.0,
+  "mode": "centralized",
+  "epochs": 100000,
+  "log_every": 100,
+  "setup": "B",
+  "id": "cent_addition_5fa48b408bbf",
+  "output_dir": "/home/james/Documents/modules/ToDL/federated_learning_grokking/results/mechinterp/twins/runs/cent_addition_5fa48b408bbf"
+}
