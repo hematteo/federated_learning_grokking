@@ -2753,6 +2753,54 @@ def t5_local_epochs():
     return specs
 
 
+def x_a_high_e():
+    """TIER X: the anchor's local-epoch ladder extended to E = 100 and E = 200.
+
+    WHY. t5_local_epochs stops at E = 50, and A is the one setup whose
+    generalisation clock moves on that axis at matched compute: t_first_cross is
+    flat to E = 25 (12,600 -> 14,800) and then jumps to 23,000 at E = 50 (1.8x
+    the E = 5 control) while t_memo stays at ~3,700. Two more rungs say whether
+    that is the start of a trend or a single step. A is also the only setup
+    where the rungs are cheap -- per-round cost is orchestration, flat in E, so
+    each run is a few minutes.
+
+    DESIGN. Identical to t5_local_epochs' A block (K = 10, iid, FedAvg, GD,
+    alpha 0.30, 3 seeds), scaled by _e_scaled, so the E = 5 control and the
+    existing rungs are the reference and nothing is re-run. Tagged
+    group=local_epochs so the E-ladder figures pick the rungs up.
+
+    BUDGET: 100,000 steps, double the existing rungs' 50,000 (1,000 rounds at
+    E = 100, 500 at E = 200). If t_first_cross keeps growing past E = 50's
+    23,000 at the rate it grew from E = 25, E = 200 lands near or beyond 50,000,
+    and a censored rung would not say whether the axis saturates or runs away.
+    Same move B's rungs made (rungs at 2x the control); compare on
+    t_first_cross, which 14.4 licenses across budgets. The budget is inside the
+    run id, so it is set generously once rather than extended later.
+
+    RESOLUTION. eval_every scales as 5/E and floors at one round, so E = 100 is
+    sampled every 100 steps like every other rung but E = 200 only every 200.
+    Crossing times there carry up to 200 steps of rounding against values in
+    the tens of thousands.
+
+    > DECISION RULE. Read t_first_cross (and delay = t_first_cross - t_memo)
+    > against E. Growing through E = 100 and 200 -> local work taxes
+    > generalisation on the anchor without bound at matched compute, and the
+    > E = 50 point in Fig. 2 is the start of the curve. Flat from E = 50 -> the
+    > cost saturates, and Fig. 2 should say so. A rung whose test accuracy is
+    > NaN diverged (200 full-batch lr-50 GD steps per client per round), which
+    > is a stability limit, not a grokking result.
+    """
+    label, common, _, _, _ = _k10_blocks()[0]
+    assert label == "A"
+    tags = {"tier": "TX", "group": "local_epochs", "experiment": "exp_e",
+            "setup": "A"}
+    specs = []
+    for E in (100, 200):
+        specs += expand_grid(_e_scaled(common, 2 * FL_ROUNDS, E), {"seed": SEEDS3},
+                             tags=tags)
+    return specs
+
+
 def t5_participation():
     """PAPER AXIS 2: partial participation, on the four setups that lack it.
 
@@ -3096,6 +3144,7 @@ def x_e50_long():
     return specs
 
 BUILDERS = {
+    "x_a_high_e": x_a_high_e,
     "x_e50_long": x_e50_long,
     "t5_local_epochs": t5_local_epochs,
     "t5_participation": t5_participation,
