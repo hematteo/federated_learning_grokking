@@ -323,7 +323,7 @@ def cent_runs(rows, s, alpha, wd=None):
 # ── drawing helpers ───────────────────────────────────────────────────────────
 
 KS = [1, 2, 5, 10, 20, 50, 97]  # the draft's K axis: equal spacing, "cent" at 1
-ES = [1, 5, 10, 25, 50]
+ES = [1, 5, 10, 25, 50, 100, 200]  # 100 and 200 are setup A only (x_a_high_e)
 
 
 def kx(K):
@@ -745,9 +745,15 @@ def fig2(rows):
         label="Memorisation",
         err=span(sts, "memo", 1e3),
     )
+    # The last rung with both clocks finite carries the label; a rung where
+    # neither event happened within budget (E = 200) is a cross on the top edge.
+    fin = [i for i, (m, f) in enumerate(zip(memo, fc)) if _finite(m) and _finite(f)]
+    for E, st in zip(Es, sts):
+        if not _finite(st["fc"]):
+            censored_x(ax, ex(E), COL["A"])
     ax.annotate(
         "delay",
-        (xs[-1], (memo[-1] + fc[-1]) / 2),
+        (xs[fin[-1]], (memo[fin[-1]] + fc[fin[-1]]) / 2),
         xytext=(-6, 0),
         textcoords="offset points",
         ha="right",
@@ -756,7 +762,9 @@ def fig2(rows):
         color=COL["A"],
     )
     cat_axis(ax, [str(E) for E in ES])
-    ax.set_ylim(0, 26)
+    # Room for the A-only E = 100 / 200 rungs, whose crossings can run far past E = 50's.
+    top = max([26.0] + [st["fc_hi"] / 1e3 for st in sts if _finite(st["fc_hi"])])
+    ax.set_ylim(0, top * 1.12)
     ax.set_ylabel("Gradient steps (×1000)")
     ax.set_title("Grokking Time vs E (A)")
     ax.legend(loc="upper left")
@@ -784,6 +792,9 @@ def fig2(rows):
             label=NAME[s] + (" (withheld)" if s == "C" else ""),
             err=(lo, hi),
         )
+        for E, st in zip(Es, sts):
+            if not _finite(st["memo"]):
+                censored_x(axes[1], ex(E), COL[s], alpha=al)
         numbers[s] = {E: rounded(lad[E]) for E in Es}
     log_steps(axes[1], "y")
     axes[1].set_ylabel(TMEMO + " / E (rounds)")
@@ -804,7 +815,12 @@ def fig2(rows):
             err=span(sts, "delay"),
         )
         for E in Es:
-            if not _finite(lad[E]["delay"]):
+            if not _finite(lad[E]["delay"]) and not _finite(lad[E]["memo"]):
+                # Never memorised within budget: no delay exists. Censored, not
+                # the fixed point -- that star is reserved for cells that
+                # memorised and then never crossed (D at E = 50).
+                censored_x(axes[2], ex(E), COL[s])
+            elif not _finite(lad[E]["delay"]):
                 axes[2].plot(
                     [ex(E)],
                     [0.96],

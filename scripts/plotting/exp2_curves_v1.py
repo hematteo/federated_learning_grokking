@@ -36,6 +36,13 @@ RAMP = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281", "#0d366b"]
 GRAY = "#898781"
 INK2, RULE = "#52514e", "#e1e0d9"
 
+# --clean fixes everything that otherwise varies with the data, so figures for
+# different setups line up: one colour per K, one x-range, one canvas and margins.
+CLEAN_KS = (2, 5, 10, 20, 50)
+CLEAN_XLIM = (70, 3e5)
+CLEAN_SIZE = (7.0, 5.6)
+CLEAN_MARGINS = dict(left=0.115, right=0.985, top=0.985, bottom=0.185, hspace=0.12)
+
 
 def select(setup, csv_path):
     """{axis value: {"cent": [rows], K: [rows]}} for the runs the ratio plot uses."""
@@ -70,7 +77,7 @@ def k_colors(ks):
             for i, k in enumerate(ks)}
 
 
-def draw(ax_test, ax_train, cells, col):
+def draw(ax_test, ax_train, cells, col, clean=False):
     ks = sorted(k for k in cells if k != "cent")
     # Centralised last and on top: on setup A the federated curves sit exactly on
     # it, and drawn underneath it disappears.
@@ -94,23 +101,26 @@ def draw(ax_test, ax_train, cells, col):
             if t != float("inf"):
                 y = next(te for x, te, _ in pts if x >= t)
                 ax_test.plot(t, y, "o", ms=4.5, color=c, mec="white", mew=0.8, zorder=5)
-            else:
+            elif not clean:
                 ax_test.plot(xs[-1], pts[-1][1], "x", ms=6, color=c, mew=1.4, zorder=5)
     for ax, label in ((ax_test, f"bar {bar:g}"), (ax_train, "99% (t_memo)")):
         y = bar if ax is ax_test else 99.0
         ax.axhline(y, color=GRAY, lw=0.8, ls=(0, (4, 3)), zorder=1)
         # In the right margin, where no curve can run through it.
-        ax.text(1.01, y, label, transform=ax.get_yaxis_transform(),
-                ha="left", va="center", fontsize=7, color=GRAY, clip_on=False)
+        if not clean:
+            ax.text(1.01, y, label, transform=ax.get_yaxis_transform(),
+                    ha="left", va="center", fontsize=7, color=GRAY, clip_on=False)
     for ax in (ax_test, ax_train):
         ax.set_xscale("log")
+        if clean:
+            ax.set_xlim(*CLEAN_XLIM)
         ax.set_ylim(-2, 103)
         ax.set_yticks([0, 50, 100])
         ax.grid(axis="y", color=RULE, lw=0.6)
         ax.set_axisbelow(True)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
-        ax.tick_params(labelsize=8, colors=INK2)
+        ax.tick_params(labelsize=11 if clean else 8, colors="black" if clean else INK2)
 
 
 def main():
@@ -118,43 +128,75 @@ def main():
     ap.add_argument("--setup", default="B")
     ap.add_argument("--out", default="figures/exp2")
     ap.add_argument("--csv", default="results/data/runs_v2.csv")
+    ap.add_argument("--drop", type=float, nargs="+", default=[],
+                    help="data-axis values (alpha, or n_train on E) to leave out; "
+                         "written to a separate file")
+    ap.add_argument("--clean", action="store_true",
+                    help="title reduced to setup, architecture and the data-axis "
+                         "value; no panel header, no labels on the bar and t_memo "
+                         "lines, and no crosses on runs that never crossed")
+    ap.add_argument("--no-title", action="store_true", help="omit the figure title")
+    ap.add_argument("--name", help="setup letter shown in the title (default: --setup)")
     a = ap.parse_args()
+    # --clean is the paper version: larger, black text.
+    fs, ink = (12, "black") if a.clean else (9, INK2)
 
     data = select(a.setup, a.csv)
+    data = {v: c for v, c in data.items() if float(v) not in a.drop}
     if not data:
         sys.exit(f"setup {a.setup}: no banked series")
     vals = sorted(data, key=float)
-    fig, axes = plt.subplots(2, len(vals), figsize=(max(5.2 * len(vals), 7.0), 5.6),
-                             sharex="col", squeeze=False)
+    size = CLEAN_SIZE if a.clean else (max(5.2 * len(vals), 7.0), 5.6)
+    fig, axes = plt.subplots(2, len(vals), figsize=size, sharex="col", squeeze=False)
     name = "n_train" if a.setup == "E" else "α"
-    col = k_colors({k for c in data.values() for k in c if k != "cent"})
+    present = {k for c in data.values() for k in c if k != "cent"}
+    col = k_colors(present | set(CLEAN_KS)) if a.clean else k_colors(present)
+    col = {k: c for k, c in col.items() if k in present}
     for j, v in enumerate(vals):
         cells = data[v]
-        draw(axes[0, j], axes[1, j], cells, col)
+        draw(axes[0, j], axes[1, j], cells, col, clean=a.clean)
         r0 = cells["cent"][0]
         ks = sorted(k for k in cells if k != "cent")
         n = sum(len(x) for x in cells.values())
-        axes[0, j].set_title(f"{name} = {float(v):g} · wd {float(r0['weight_decay']):g} · "
-                             f"K = {', '.join(map(str, ks))} · {n} runs",
-                             fontsize=9, loc="left", color=INK2)
-        axes[1, j].set_xlabel("gradient steps", fontsize=9, color=INK2)
+        if not a.clean:
+            axes[0, j].set_title(f"{name} = {float(v):g} · wd {float(r0['weight_decay']):g} · "
+                                 f"K = {', '.join(map(str, ks))} · {n} runs",
+                                 fontsize=9, loc="left", color=INK2)
+        axes[1, j].set_xlabel("gradient steps", fontsize=fs, color=ink)
         print(f"  {name}={float(v):g}: cent {len(cells['cent'])}, "
               + ", ".join(f"K={k}: {len(cells[k])}" for k in ks))
-    axes[0, 0].set_ylabel("test accuracy (%)", fontsize=9, color=INK2)
-    axes[1, 0].set_ylabel("train accuracy (%)", fontsize=9, color=INK2)
+    axes[0, 0].set_ylabel("test accuracy (%)", fontsize=fs, color=ink)
+    axes[1, 0].set_ylabel("train accuracy (%)", fontsize=fs, color=ink)
     label = dict(SETUPS)[a.setup]
-    fig.suptitle(f"Setup {a.setup} — {label}: training curves behind the slowdown ratio\n"
-                 "E = 5 · FedAvg · IID · dot = first crossing, × = never crossed",
-                 fontsize=10.5, x=0.01, ha="left")
+    details = "E = 5 · FedAvg · IID"
+    markers = " · dot = first crossing, × = never crossed"
+    # Clean title: setup, architecture and -- with one column -- the data-axis value.
+    short = [f"Setup {a.name or a.setup}", label.split(" · ")[0]]
+    if len(vals) == 1:
+        short.append(f"{name} = {float(vals[0]):g}")
+    title = " · ".join(short) if a.clean else (
+        f"Setup {a.setup} — {label}: training curves behind the slowdown ratio\n{details}{markers}")
+    if not a.no_title:
+        fig.suptitle(title, fontsize=10.5, x=0.01, ha="left")
     handles = [Line2D([], [], color=GRAY, lw=1.8, label="centralised")] + \
               [Line2D([], [], color=c, lw=1.8, label=f"K = {k}") for k, c in col.items()]
-    fig.legend(handles=handles, loc="lower center", ncol=len(handles), fontsize=8.5,
-               frameon=False, bbox_to_anchor=(0.5, 0.0))
-    fig.tight_layout(rect=(0, 0.05, 1, 0.95))
+    if a.clean:
+        fig.subplots_adjust(**CLEAN_MARGINS)
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), fontsize=11,
+                   frameon=False, bbox_to_anchor=(0.5, 0.0), handlelength=1.3,
+                   handletextpad=0.5, columnspacing=0.9)
+    else:
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), fontsize=8.5,
+                   frameon=False, bbox_to_anchor=(0.5, 0.0))
+        fig.tight_layout(rect=(0, 0.05, 1, 1.0 if a.no_title else 0.95))
     os.makedirs(a.out, exist_ok=True)
     stem = os.path.join(a.out, f"exp2_curves_v1_{a.setup.replace(chr(39), 'prime')}")
+    if a.drop:
+        stem += "_without_" + "_".join(f"{v:g}" for v in a.drop)
     for ext in ("png", "pdf"):
-        fig.savefig(f"{stem}.{ext}", dpi=200, bbox_inches="tight", facecolor="white")
+        # No tight bbox under --clean: it would crop each canvas to its own legend.
+        fig.savefig(f"{stem}.{ext}", dpi=200, facecolor="white",
+                    bbox_inches=None if a.clean else "tight")
     plt.close(fig)
     print(f"  wrote {stem}.png/.pdf")
 

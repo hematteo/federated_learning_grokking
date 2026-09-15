@@ -4,6 +4,8 @@
 
 The E ladder is `t5_local_epochs`: FedAvg, K = 10, IID, E in {5, 10, 25, 50}
 (A also E = 1), rounds scaled by 5/E so every rung does the same gradient work.
+A also carries E = 100 and 200 from `x_a_high_e`, at twice the budget
+(100,000 steps against 50,000), compared on first crossing.
 The E = 5 control is the banked K = 10 cell paper_figures._e_ladder picks, so
 these are the runs Fig. 2 summarises.
 
@@ -36,9 +38,10 @@ _spec.loader.exec_module(ec)
 pf = ec.pf
 
 SETUPS = "ABCDE"
-ES = [1, 5, 10, 25, 50]
-# Ordered axis -> one hue light to dark; E = 1 (A only) lightest.
-E_COL = dict(zip(ES, ["#b7d3f5", "#86b6ef", "#4f8fe0", "#1c5cab", "#0d366b"]))
+ES = [1, 5, 10, 25, 50, 100, 200]
+# Ordered axis -> one hue light to dark; E = 1, 100 and 200 are setup A only.
+E_COL = dict(zip(ES, ["#c9ddf7", "#9cc2f0", "#6fa3e6", "#3f82d8", "#2463b4",
+                      "#154a8c", "#0a2f5c"]))
 OUT = "figures/exp4"
 
 
@@ -195,14 +198,11 @@ def curves(lads):
                 t.remove()
         for ax in axes[:, j]:
             ax.tick_params(labelsize=6.5)
-            for ln in ax.get_lines():
-                if s == "C":
-                    ln.set_alpha(ln.get_alpha() * pf.WITHHELD if ln.get_alpha() else pf.WITHHELD)
     axes[0, 0].set_ylabel("test accuracy (%)", fontsize=8)
     axes[1, 0].set_ylabel("train accuracy (%)", fontsize=8)
     handles = [Line2D([], [], color=E_COL[E], lw=1.8, label=f"E = {E}") for E in ES]
     handles += ec.MARK_HANDLES[:2]
-    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=7,
+    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=9,
                fontsize=7)
     fig.suptitle("Training Curves per Run across Local Epochs (same total gradient steps)",
                  fontsize=9.5, y=1.0)

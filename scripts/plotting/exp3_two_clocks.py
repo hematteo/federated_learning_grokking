@@ -151,19 +151,45 @@ def main():
     os.makedirs(out, exist_ok=True)
     save(fig, out, "exp3_two_clocks")
 
-    # Panel (b) on its own: time to cross the bar against label skew.
-    fig, ax = plt.subplots(figsize=(4.6, 3.5))
-    dirichlet_axes(ax, "fc")
-    ax.set_ylabel(pf.TFC + " / matched IID")
-    # Finite values stay under 4x; the crosses sit on the top edge regardless.
-    ax.set_ylim(0.4, 7)
-    ax.set_yticks([0.5, 1, 2, 5])
-    ax.set_yticklabels(["0.5×", "1×", "2×", "5×"])
-    ax.set_title("Time to Generalise under Label Skew (K = 10)")
-    fig.legend(handles=legend_handles(), loc="upper center", ncol=3,
-               bbox_to_anchor=(0.5, 0.0), fontsize=6.6)
-    fig.tight_layout()
-    save(fig, out, "exp3_two_clocks_b")
+    # Panel (b) on its own, in paper form: time to cross the bar against label
+    # skew. No title (the caption carries K = 10 and the C caveat), larger text,
+    # and one legend with the marker key in its own column.
+    with plt.rc_context({"font.size": 9, "axes.labelsize": 9.5, "xtick.labelsize": 8.5,
+                         "ytick.labelsize": 8.5, "legend.fontsize": 8}):
+        fig, ax = plt.subplots(figsize=(4.8, 3.3))
+        panel(ax, data, "dir", "fc", order.index, dir_dodge)
+        pf.cat_axis(ax, [f"{d:g}" for d in order])
+        ax.grid(axis="x", visible=False)
+        ax.set_xlabel(r"Dirichlet $\alpha_{\mathrm{dir}}$")
+        # Plotted statistic is still t_first_cross; the label uses the paper's notation.
+        ax.set_ylabel(r"$t^{\mathrm{Non\text{-}IID}}_{\mathrm{grok}}\,/\,t^{\mathrm{IID}}_{\mathrm{grok}}$")
+        # Finite values stay under 4x; the crosses sit on the top edge.
+        ax.set_ylim(0.4, 7)
+        ax.set_yticks([0.5, 1, 2, 5])
+        ax.set_yticklabels(["0.5×", "1×", "2×", "5×"])
+        setups = [Line2D([], [], color=pf.COL[s], marker="o", lw=1.4, ms=5,
+                         alpha=pf.WITHHELD if s == "C" else 1.0, label=pf.NAME[s])
+                  for s in SETUPS]
+        fills = [
+            Line2D([], [], color=pf.INK2, marker="o", ls="none", ms=5, mfc=pf.INK2,
+                   label="all runs crossed"),
+            Line2D([], [], color=pf.INK2, marker="o", ls="none", ms=5, mfc="white",
+                   mew=1.2, label="some runs crossed"),
+            Line2D([], [], color=pf.INK2, marker="x", ls="none", ms=6, mew=1.5,
+                   label="no run crossed"),
+        ]
+        # Legend fills column by column: a blank after E puts the three marker
+        # entries together in the last column.
+        blank = [Line2D([], [], ls="none", label=" ")]
+        fig.tight_layout()
+        fig.legend(handles=setups + blank + fills, loc="upper center", ncol=3, frameon=False,
+                   bbox_to_anchor=(0.53, 0.0), handlelength=1.5, columnspacing=1.0,
+                   handletextpad=0.5)
+        for ext in ("png", "pdf"):
+            fig.savefig(os.path.join(out, f"exp3_two_clocks_b.{ext}"), bbox_inches="tight",
+                        facecolor="white", dpi=300)
+        plt.close(fig)
+        print(f"  wrote {out}/exp3_two_clocks_b.png/.pdf")
 
     # Partitions on their own, one figure per clock, with Dirichlet 0.5 from the
     # same campaign as the unstructured reference beside the structured splits.

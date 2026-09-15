@@ -10,8 +10,8 @@
   exp3b_first_cross_vs_K.png   first-crossing time against K per setup, one line
                                per partition with IID for reference.
   exp3b_curves_by_partition.png  held-out accuracy per run against steps, a row
-                               per setup and a column per partition (K = 10),
-                               IID in gray behind.
+                               per partition and a column per setup (K = 10),
+                               IID in gray behind. Paper form: no title.
 
 Runs are exp3_curves.partition_columns' (paper_figures.fig4(d)'s selection).
 Setup C is faded (RESULTS 23).
@@ -25,6 +25,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 from matplotlib.lines import Line2D
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -167,54 +168,69 @@ def first_cross_vs_K(rows):
 # ── 3. curves, organised by partition ────────────────────────────────────────
 
 def curves_by_partition(rows):
+    """Paper form, landscape: a row per partition, a column per setup (K = 10).
+
+    No title; setup names head the columns and partition names label the rows.
+    The panel with no cell (E has no operand split) holds the legend.
+
+    Column order is the paper's, not the repo's: D (quad-MLP, S5) sits second,
+    between the two modular setups' neighbours, and B, C move one right. Column
+    headings carry the paper's letters, which are the column positions.
+    """
+    order = "ADBCE"
     parts = ["operand", "label", "dirichlet"]
-    fig, axes = plt.subplots(5, len(parts), figsize=(7.2, 6.4), sharex="row", sharey=True,
-                             gridspec_kw=dict(hspace=0.45, wspace=0.1))
-    for i, s in enumerate(SETUPS):
-        cols = dict(columns(rows, s))
-        for j, p in enumerate(parts):
-            ax = axes[i, j]
-            K = 10
-            cell = cols.get(K, {})
-            if p not in cell:
-                ax.set_axis_off()
-                continue
-            for runs, col, lw, z in ((cell.get("iid", []), IID_COL, 1.6, 2),
-                                     (cell[p], colour(p), 0.9, 3)):
-                for r in runs:
-                    h = pf.history(r["id"])
-                    if h is None:
-                        continue
-                    st = h.get("total_steps") or h.get("epoch")
-                    pts = [(x, y) for x, y in zip(st, h["test_acc"]) if x > 0]
-                    ax.plot([a for a, _ in pts], [b for _, b in pts], color=col, lw=lw,
-                            alpha=0.75 * fade(s), zorder=z)
-            ax.axhline(r["grok_threshold"], color=pf.MUTED, ls="--", lw=0.7, zorder=1)
-            ax.set_xscale("log")
-            ax.set_ylim(-3, 103)
-            ax.set_yticks([0, 50, 100])
-            ax.tick_params(labelsize=6)
-            crossed = sum(pf._finite(r["t_first_cross"]) for r in cell[p])
-            ax.text(0.03, 0.62, f"{crossed}/{len(cell[p])}\ncrossed", transform=ax.transAxes,
-                    fontsize=5.8, color=pf.INK2, va="center")
-        axes[i, 0].set_ylabel(f"{s}{' (withheld)' if s == 'C' else ''}\ntest acc. (%)",
-                              fontsize=7)
-        if not axes[i, 0].axison:
-            # First column empty on this row: label the first drawn panel instead,
-            # and give it back the tick labels sharey hid.
-            first = next(ax for ax in axes[i] if ax.axison)
-            first.set_ylabel(f"{s}\ntest acc. (%)", fontsize=7)
-            first.tick_params(labelleft=True)
-    for j, p in enumerate(parts):
-        axes[0, j].set_title(TICK[p].replace("\n", " "), fontsize=7.5)
-        for ax in axes[:, j][::-1]:
-            if ax.axison:
-                ax.set_xlabel("gradient steps", fontsize=6.5)
-                break
-    legend(fig, set(parts) | {"iid"}, ncol=3, y=0.04)
-    fig.suptitle("Held-out Accuracy per Run, by Partition (K = 10)",
-                 fontsize=9, y=0.94)
-    save(fig, "exp3b_curves_by_partition")
+    row_name = {"operand": "Operand", "label": "Label", "dirichlet": "Dirichlet 0.5"}
+    rc = {"font.size": 8.5, "axes.labelsize": 8.5, "axes.titlesize": 8.5,
+          "xtick.labelsize": 7.5, "ytick.labelsize": 7.5, "legend.fontsize": 8}
+    with plt.rc_context(rc):
+        fig, axes = plt.subplots(len(parts), len(order), figsize=(9.0, 4.9),
+                                 sharex="col", sharey=True,
+                                 gridspec_kw=dict(hspace=0.14, wspace=0.12))
+        empty = []
+        for j, s in enumerate(order):
+            cell = dict(columns(rows, s)).get(10, {})
+            for i, p in enumerate(parts):
+                ax = axes[i, j]
+                if p not in cell:
+                    empty.append(ax)
+                    continue
+                for runs, col, lw, z in ((cell.get("iid", []), IID_COL, 1.5, 2),
+                                         (cell[p], colour(p), 1.0, 3)):
+                    for r in runs:
+                        h = pf.history(r["id"])
+                        if h is None:
+                            continue
+                        st = h.get("total_steps") or h.get("epoch")
+                        pts = [(x, y) for x, y in zip(st, h["test_acc"]) if x > 0]
+                        ax.plot([a for a, _ in pts], [b for _, b in pts], color=col,
+                                lw=lw, alpha=0.8, zorder=z)
+                ax.axhline(cell[p][0]["grok_threshold"], color=pf.MUTED, ls="--",
+                           lw=0.7, zorder=1)
+                ax.set_xscale("log")
+                ax.xaxis.set_major_locator(matplotlib.ticker.LogLocator(numticks=10))
+                ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+                ax.set_ylim(-3, 103)
+                ax.set_yticks([0, 50, 100])
+                ax.grid(axis="x", visible=False)
+                crossed = sum(pf._finite(r["t_first_cross"]) for r in cell[p])
+                # Just under the bar line, where the curves are still near zero.
+                ax.text(0.04, 0.82, f"{crossed}/{len(cell[p])}", transform=ax.transAxes,
+                        ha="left", va="top", fontsize=7.5, color=pf.INK2)
+            _, desc = pf.NAME[s].split(": ", 1)
+            axes[0, j].set_title(f"{'ABCDE'[j]}\n{desc}")
+            axes[-1, j].set_xlabel("gradient steps")
+        for i, p in enumerate(parts):
+            axes[i, 0].set_ylabel(f"{row_name[p]}\nTest accuracy (%)")
+        for ax in empty:
+            # Keep the column's shared x ticks on the row below, then use the space.
+            ax.set_axis_off()
+        handles = [Line2D([], [], color=colour(p), lw=2, label=lab) for p, lab in (
+            ("iid", "IID"), ("operand", "Operand"),
+            ("label", "Label"), ("dirichlet", "Dirichlet 0.5"))]
+        host = empty[0] if empty else axes[0, -1]
+        host.legend(handles=handles, loc="center", frameon=False, handlelength=1.5,
+                    fontsize=7.5, borderaxespad=0)
+        save(fig, "exp3b_curves_by_partition")
 
 
 def main():
