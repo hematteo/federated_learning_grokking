@@ -81,14 +81,12 @@ __pycache__/
 # committed -- they are the only readable form of work that would otherwise need
 # the out-of-band 34 GB of checkpoints to recompute -- with three exceptions,
 # all large and all regenerable:
-#   spectra/*.npz and spectra_{clock,in_power,sv_summary}.csv  (~200 MB; one is
-#     within a few MB of GitHub's 100 MB hard limit) -- spectra.py rebuilds them
-#     from the checkpoints, and checkpoint_metrics.csv already carries the
-#     scalars every figure uses.
-#   history_series_*.csv (~40 MB) -- histories.py rebuilds them in minutes from
-#     results/runs/*/history_*.json, which ARE committed.
+#   spectra/*.npz (~55 MB of raw per-checkpoint vectors) -- spectra.py rebuilds
+#     them from the checkpoints, and `spectra.py --collect` re-derives the
+#     spectra_*.csv beside them, which ARE committed.
+#   spectra_sv_summary.csv -- committed as .csv.gz instead: the plain CSV is
+#     99.4 MiB, inside GitHub's 100 MB hard limit only by a hair and above the
+#     size it warns at. Regenerate it with `gunzip -k`, or with spectra.py
+#     --collect.
 results/mechinterp/spectra/
-results/mechinterp/spectra_clock.csv
-results/mechinterp/spectra_in_power.csv
 results/mechinterp/spectra_sv_summary.csv
-results/mechinterp/history_series_*.csv
